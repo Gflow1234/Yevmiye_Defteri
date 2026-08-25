@@ -75,35 +75,56 @@
       return (ranges || []).reduce((sum, r) => sum + rangeHours(r.start, r.end), 0);
     }
 
-    function payOf(rawHours, holiday, settings) {
-      const windowHours = rangeHours(settings.standardStart, settings.standardEnd);
-      const standardNet = Math.max(windowHours - settings.dailyBreakHours, 0.01);
-      const netHours = rawHours > 0 ? Math.max(0, rawHours - settings.dailyBreakHours) : 0;
-      const hourlyRate = settings.dailyWage / standardNet;
+    // Projeye Özel Ayarları Getiren Yardımcı Fonksiyon
+    function getProjectSettings(pName, settings) {
+      const p = settings.projectSettings?.[pName] || {};
+      return {
+        dailyWage: p.dailyWage ?? settings.dailyWage ?? 1000,
+        standardStart: p.standardStart ?? settings.standardStart ?? "08:00",
+        standardEnd: p.standardEnd ?? settings.standardEnd ?? "17:00",
+        dailyBreakHours: p.dailyBreakHours ?? settings.dailyBreakHours ?? 1,
+        otMultiplier: p.otMultiplier ?? settings.otMultiplier ?? 1.5,
+        holidayMultiplier: p.holidayMultiplier ?? settings.holidayMultiplier ?? 2,
+        transportGo: p.transportGo ?? 0,
+        transportReturn: p.transportReturn ?? 0,
+      };
+    }
+
+    function payOf(rawHours, holiday, projSettings, transportPay = 0) {
+      const windowHours = rangeHours(projSettings.standardStart, projSettings.standardEnd);
+      const standardNet = Math.max(windowHours - projSettings.dailyBreakHours, 0.01);
+      const netHours = rawHours > 0 ? Math.max(0, rawHours - projSettings.dailyBreakHours) : 0;
+      const hourlyRate = projSettings.dailyWage / standardNet;
       const normalHours = Math.min(netHours, standardNet);
       const otHours = Math.max(0, netHours - standardNet);
-      const basePay = normalHours * hourlyRate + otHours * hourlyRate * settings.otMultiplier;
-      const finalPay = holiday ? basePay * settings.holidayMultiplier : basePay;
-      return { hourlyRate, standardNet, netHours, normalHours, otHours, basePay, finalPay };
+      const basePay = normalHours * hourlyRate + otHours * hourlyRate * projSettings.otMultiplier;
+      const wagePay = holiday ? basePay * projSettings.holidayMultiplier : basePay;
+      const finalPay = wagePay + (rawHours > 0 ? transportPay : 0);
+      return { hourlyRate, standardNet, netHours, normalHours, otHours, basePay: wagePay, finalPay, transportPay };
     }
 
     const fmtMoney = (n) => (isFinite(n) ? n : 0).toLocaleString("tr-TR", { maximumFractionDigits: 0 }) + " ₺";
     const fmtHours = (n) => (isFinite(n) ? n : 0).toLocaleString("tr-TR", { maximumFractionDigits: 1 }) + " sa";
     const initialsOf = (f, l) => `${(f || "").trim()[0] || ""}${(l || "").trim()[0] || ""}`.toUpperCase() || "?";
 
+    const DEFAULT_PROJECT_ITEM = {
+      dailyWage: 1000,
+      standardStart: "08:00",
+      standardEnd: "17:00",
+      dailyBreakHours: 1,
+      otMultiplier: 1.5,
+      holidayMultiplier: 2,
+      transportGo: 0,
+      transportReturn: 0
+    };
+
     const DEFAULT_SETTINGS = { 
       activeProject: "Genel Proje",
-      dailyWage: 1000, 
-      standardStart: "08:00", 
-      standardEnd: "17:00", 
-      dailyBreakHours: 1, 
-      otMultiplier: 1.5, 
-      holidayMultiplier: 2,
       projects: ["Genel Proje", "Saha Çalışması", "Atölye"],
       projectSettings: {
-        "Genel Proje": { dailyWage: 1000, standardStart: "08:00", standardEnd: "17:00" },
-        "Saha Çalışması": { dailyWage: 1200, standardStart: "08:00", standardEnd: "18:00" },
-        "Atölye": { dailyWage: 900, standardStart: "08:30", standardEnd: "17:30" }
+        "Genel Proje": { ...DEFAULT_PROJECT_ITEM, dailyWage: 1000 },
+        "Saha Çalışması": { ...DEFAULT_PROJECT_ITEM, dailyWage: 1200, transportGo: 50, transportReturn: 50 },
+        "Atölye": { ...DEFAULT_PROJECT_ITEM, dailyWage: 900 }
       }
     };
     const DEFAULT_PROFILE = { firstName: "", lastName: "" };
@@ -111,7 +132,13 @@
     /* ---------------- Storage (LocalStorage) ---------------- */
     function loadAll() {
       const out = { settings: DEFAULT_SETTINGS, entries: {}, profile: DEFAULT_PROFILE, theme: "dark" };
-      try { const s = localStorage.getItem("yevmiye:settings"); if (s) out.settings = { ...DEFAULT_SETTINGS, ...JSON.parse(s) }; } catch (e) {}
+      try { 
+        const s = localStorage.getItem("yevmiye:settings"); 
+        if (s) {
+          const parsed = JSON.parse(s);
+          out.settings = { ...DEFAULT_SETTINGS, ...parsed, projectSettings: { ...DEFAULT_SETTINGS.projectSettings, ...(parsed.projectSettings || {}) } };
+        } 
+      } catch (e) {}
       try { const en = localStorage.getItem("yevmiye:entries"); if (en) out.entries = JSON.parse(en); } catch (e) {}
       try { const pr = localStorage.getItem("yevmiye:profile"); if (pr) out.profile = { ...DEFAULT_PROFILE, ...JSON.parse(pr) }; } catch (e) {}
       try { const th = localStorage.getItem("yevmiye:theme"); if (th) out.theme = JSON.parse(th); } catch (e) {}
@@ -134,7 +161,7 @@
       const [selectedKey, setSelectedKey] = useState(null);
       const [profileOpen, setProfileOpen] = useState(false);
 
-      // Kaydetmeden çıkma guard durumları
+      // Guard Modal durumları
       const [isDirty, setIsDirty] = useState(false);
       const [pendingTab, setPendingTab] = useState(null);
       const [showGuardModal, setShowGuardModal] = useState(false);
@@ -197,23 +224,29 @@
       }, [entries, cursor]);
 
       const monthSummary = useMemo(() => {
-        let days = 0, normal = 0, ot = 0, pay = 0;
+        let days = 0, normal = 0, ot = 0, pay = 0, transport = 0;
         const projectMap = {};
 
         for (const [, v] of monthEntries) {
+          const projName = v.project || settings.activeProject || "Genel Proje";
+          const pSet = getProjectSettings(projName, settings);
           const th = totalHoursOf(v.ranges);
-          const p = payOf(th, v.holiday, settings);
-          days += 1; normal += p.normalHours; ot += p.otHours; pay += p.finalPay;
+          
+          let tPay = 0;
+          if (v.includeTransportGo) tPay += v.transportGoVal ?? pSet.transportGo;
+          if (v.includeTransportReturn) tPay += v.transportReturnVal ?? pSet.transportReturn;
 
-          const proj = v.project || "Belirtilmedi";
-          if (!projectMap[proj]) {
-            projectMap[proj] = { days: 0, pay: 0, hours: 0 };
+          const p = payOf(th, v.holiday, pSet, tPay);
+          days += 1; normal += p.normalHours; ot += p.otHours; pay += p.finalPay; transport += tPay;
+
+          if (!projectMap[projName]) {
+            projectMap[projName] = { days: 0, pay: 0, hours: 0 };
           }
-          projectMap[proj].days += 1;
-          projectMap[proj].pay += p.finalPay;
-          projectMap[proj].hours += p.netHours;
+          projectMap[projName].days += 1;
+          projectMap[projName].pay += p.finalPay;
+          projectMap[projName].hours += p.netHours;
         }
-        return { days, normal, ot, pay, projectMap };
+        return { days, normal, ot, pay, transport, projectMap };
       }, [monthEntries, settings]);
 
       const persistEntries = (next) => { setEntries(next); saveEntries(next); };
@@ -462,8 +495,10 @@
                 const isToday = k === tKey;
                 let dot = null, netH = 0;
                 if (entry && entry.worked) {
+                  const projName = entry.project || settings.activeProject || "Genel Proje";
+                  const pSet = getProjectSettings(projName, settings);
                   const raw = totalHoursOf(entry.ranges);
-                  const p = payOf(raw, entry.holiday, settings);
+                  const p = payOf(raw, entry.holiday, pSet);
                   netH = p.netHours;
                   dot = entry.holiday ? T.holiday : p.otHours > 0 ? T.ot : T.normal;
                 }
@@ -505,12 +540,10 @@
 
     /* ---------------- Summary tab ---------------- */
     function SummaryTab({ T, monthLabel, changeMonth, monthEntries, monthSummary, settings, onSelect, profile }) {
-      const { days, normal, ot, pay, projectMap } = monthSummary;
+      const { days, normal, ot, pay, transport, projectMap } = monthSummary;
       const fullName = `${profile.firstName || ''} ${profile.lastName || ''}`.trim();
 
-      const printPDF = () => {
-        window.print();
-      };
+      const printPDF = () => { window.print(); };
 
       return (
         <div>
@@ -533,11 +566,12 @@
               <ReceiptRow T={T} label="Çalışılan gün" value={`${days} gün`} />
               <ReceiptRow T={T} label="Normal saat" value={fmtHours(normal)} />
               <ReceiptRow T={T} label="Fazla mesai" value={fmtHours(ot)} color={ot > 0 ? T.ot : undefined} />
+              {transport > 0 && <ReceiptRow T={T} label="Toplam yol ücreti" value={fmtMoney(transport)} />}
               <div style={{ borderTop: `1px dashed ${T.border}`, margin: "10px 0" }} />
               <ReceiptRow T={T} label="TOPLAM KAZANÇ" value={fmtMoney(pay)} big />
             </div>
 
-            {/* --- Proje Bazlı Özet --- */}
+            {/* Proje Bazlı Özet */}
             {Object.keys(projectMap).length > 0 && (
               <div style={{ padding: "0 16px", marginBottom: 18 }}>
                 <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, marginBottom: 8, paddingLeft: 2 }}>PROJE BAZLI KAZANÇ</div>
@@ -555,14 +589,21 @@
               </div>
             )}
 
-            {/* --- Günlük Döküm --- */}
+            {/* Günlük Döküm */}
             <div style={{ padding: "0 16px" }}>
               <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, marginBottom: 8, paddingLeft: 2 }}>GÜNLÜK DÖKÜM</div>
               {monthEntries.length === 0 && <div style={{ color: T.dim, fontSize: 13.5, padding: "20px 4px" }}>Bu ay için henüz çalışma günü eklenmedi.</div>}
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {monthEntries.map(([k, v]) => {
+                  const projName = v.project || settings.activeProject || "Genel Proje";
+                  const pSet = getProjectSettings(projName, settings);
                   const raw = totalHoursOf(v.ranges);
-                  const p = payOf(raw, v.holiday, settings);
+                  
+                  let tPay = 0;
+                  if (v.includeTransportGo) tPay += v.transportGoVal ?? pSet.transportGo;
+                  if (v.includeTransportReturn) tPay += v.transportReturnVal ?? pSet.transportReturn;
+
+                  const p = payOf(raw, v.holiday, pSet, tPay);
                   const day = Number(k.slice(-2));
                   return (
                     <button key={k} onClick={() => onSelect(k)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: "10px 14px", cursor: "pointer", textAlign: "left" }}>
@@ -570,7 +611,7 @@
                         <div className="mono" style={{ width: 30, height: 30, borderRadius: 9, background: T.surface3, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0 }}>{day}</div>
                         <div>
                           <div style={{ fontSize: 13.5, fontWeight: 600 }}>{fmtHours(p.netHours)}{p.otHours > 0 ? ` · ${fmtHours(p.otHours)} mesai` : ""}</div>
-                          <div style={{ fontSize: 11, color: T.dim, marginTop: 1 }}>{v.project || "Proje Belirtilmedi"} {v.holiday ? " • Tatil Çarpanı" : ""}</div>
+                          <div style={{ fontSize: 11, color: T.dim, marginTop: 1 }}>{projName} {tPay > 0 ? ` (+${tPay}₺ Yol)` : ""}</div>
                         </div>
                       </div>
                       <div className="mono" style={{ fontSize: 14, fontWeight: 700, color: T.accent }}>{fmtMoney(p.finalPay)}</div>
@@ -603,11 +644,7 @@
       }, [settings]);
 
       const activeProjName = local.activeProject || local.projects?.[0] || "Genel Proje";
-      const pSettings = local.projectSettings?.[activeProjName] || {
-        dailyWage: local.dailyWage,
-        standardStart: local.standardStart,
-        standardEnd: local.standardEnd
-      };
+      const pSettings = getProjectSettings(activeProjName, local);
 
       const commit = (patch) => {
         setLocal((prev) => ({ ...prev, ...patch }));
@@ -616,18 +653,14 @@
 
       const commitProjectSetting = (patch) => {
         setLocal((prev) => {
-          const currentP = prev.projectSettings?.[activeProjName] || {};
+          const currentP = getProjectSettings(activeProjName, prev);
           const updatedP = { ...currentP, ...patch };
           return {
             ...prev,
             projectSettings: {
               ...(prev.projectSettings || {}),
               [activeProjName]: updatedP
-            },
-            // Aktif projenin ayarlarını ana ayarlara da yansıt
-            ...(patch.dailyWage !== undefined && { dailyWage: patch.dailyWage }),
-            ...(patch.standardStart !== undefined && { standardStart: patch.standardStart }),
-            ...(patch.standardEnd !== undefined && { standardEnd: patch.standardEnd })
+            }
           };
         });
         setIsDirty(true);
@@ -649,7 +682,7 @@
           const nextProjects = [...list, name];
           const nextPSettings = {
             ...(local.projectSettings || {}),
-            [name]: { dailyWage: local.dailyWage, standardStart: local.standardStart, standardEnd: local.standardEnd }
+            [name]: { ...DEFAULT_PROJECT_ITEM }
           };
           commit({ projects: nextProjects, projectSettings: nextPSettings, activeProject: name });
         }
@@ -657,29 +690,23 @@
       };
 
       const removeProject = (pName) => {
-        if ((local.projects || []).length <= 1) return; // En az 1 proje kalmalı
+        if ((local.projects || []).length <= 1) return;
         const list = (local.projects || []).filter((p) => p !== pName);
         const nextActive = local.activeProject === pName ? list[0] : local.activeProject;
         commit({ projects: list, activeProject: nextActive });
       };
 
       const switchActiveProject = (pName) => {
-        const targetP = local.projectSettings?.[pName] || {};
-        commit({
-          activeProject: pName,
-          dailyWage: targetP.dailyWage ?? local.dailyWage,
-          standardStart: targetP.standardStart ?? local.standardStart,
-          standardEnd: targetP.standardEnd ?? local.standardEnd
-        });
+        commit({ activeProject: pName });
       };
 
-      const standardNet = Math.max(rangeHours(pSettings.standardStart, pSettings.standardEnd) - local.dailyBreakHours, 0.01);
+      const standardNet = Math.max(rangeHours(pSettings.standardStart, pSettings.standardEnd) - pSettings.dailyBreakHours, 0.01);
       const hourlyRate = pSettings.dailyWage / standardNet;
 
       return (
         <div style={{ padding: "18px 16px 40px" }}>
           <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Ayarlar</div>
-          <div style={{ fontSize: 13, color: T.dim, marginBottom: 20 }}>Hesaplama için kullanılacak temel değerler.</div>
+          <div style={{ fontSize: 13, color: T.dim, marginBottom: 20 }}>Tüm çalışma ve hesaplama parametrelerinizi özelleştirin.</div>
 
           {/* Görünüm */}
           <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, textTransform: "uppercase", marginBottom: 10 }}>Görünüm</div>
@@ -690,24 +717,24 @@
                 <button key={id} onClick={() => setThemeMode(id)}
                   style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "11px 0", borderRadius: 12, cursor: "pointer",
                     background: active ? T.accent : T.surface2, color: active ? T.accentText : T.text, border: `1px solid ${active ? T.accent : T.border}`, fontWeight: 600, fontSize: 13.5 }}>
-                  <Icon name={icon} size={15} color={active ? T.accentText : T.text} /> {label}
+                  <Icon name="icon" size={15} color={active ? T.accentText : T.text} /> {label}
                 </button>
               );
             })}
           </div>
 
-          {/* Genel Projeler Yönetimi */}
-          <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, textTransform: "uppercase", marginBottom: 10 }}>Genel Projeler</div>
+          {/* Projeler Listesi */}
+          <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, textTransform: "uppercase", marginBottom: 10 }}>Projeler Yönetimi</div>
           <div style={{ marginBottom: 22 }}>
             <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-              <input type="text" placeholder="Yeni proje ekle..." value={newProj} onChange={(e) => setNewProj(e.target.value)} style={{ flex: 1 }} />
+              <input type="text" placeholder="Yeni proje adı..." value={newProj} onChange={(e) => setNewProj(e.target.value)} style={{ flex: 1 }} />
               <button onClick={addProject} style={{ background: T.accent, color: T.accentText, border: "none", borderRadius: 10, padding: "0 14px", fontWeight: 700, cursor: "pointer" }}>Ekle</button>
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {(local.projects || []).map((p) => {
                 const isActive = p === activeProjName;
                 return (
-                  <div key={p} onClick={() => switchActiveProject(p)} style={{ background: isActive ? T.accent : T.surface2, color: isActive ? T.accentText : T.text, border: `1px solid ${isActive ? T.accent : T.border}`, borderRadius: 20, padding: "5px 12px", fontSize: 13, display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontWeight: isActive ? 700 : 400 }}>
+                  <div key={p} onClick={() => switchActiveProject(p)} style={{ background: isActive ? T.accent : T.surface2, color: isActive ? T.accentText : T.text, border: `1px solid ${isActive ? T.accent : T.border}`, borderRadius: 20, padding: "6px 14px", fontSize: 13, display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontWeight: isActive ? 700 : 400 }}>
                     <span>{p}</span>
                     {(local.projects || []).length > 1 && (
                       <button onClick={(e) => { e.stopPropagation(); removeProject(p); }} style={{ background: "none", border: "none", color: isActive ? T.accentText : T.danger, cursor: "pointer", display: "flex", padding: 2 }}>
@@ -720,42 +747,48 @@
             </div>
           </div>
 
-          {/* Projeye Özel Ayarlar */}
-          <div style={{ background: T.surface2, border: `1px solid ${T.border}`, borderRadius: 16, padding: 14, marginBottom: 20 }}>
-            <div style={{ fontSize: 11, letterSpacing: 1, color: T.accent, fontWeight: 700, textTransform: "uppercase", marginBottom: 12 }}>
+          {/* Seçili Projeye Özel Tüm Ayarlar */}
+          <div style={{ background: T.surface2, border: `1px solid ${T.border}`, borderRadius: 16, padding: 16, marginBottom: 20 }}>
+            <div style={{ fontSize: 12, letterSpacing: 1, color: T.accent, fontWeight: 700, textTransform: "uppercase", marginBottom: 14 }}>
               "{activeProjName}" Özel Ayarları
             </div>
 
-            <Field T={T} label="Günlük yevmiye (₺)" hint="Bu projede standart net mesai saatinde kazanılan tutar">
-              <input type="number" value={pSettings.dailyWage ?? 1000} onChange={(e) => commitProjectSetting({ dailyWage: Number(e.target.value) })} style={{ width: "100%" }} />
+            <Field T={T} label="Günlük yevmiye (₺)" hint="Bu projede net mesai için kazanılan tutar">
+              <input type="number" value={pSettings.dailyWage} onChange={(e) => commitProjectSetting({ dailyWage: Number(e.target.value) })} style={{ width: "100%" }} />
             </Field>
 
-            <Field T={T} label="Standart mesai saatleri" hint="Bu projedeki varsayılan çalışma saatleri">
+            <Field T={T} label="Standart mesai saatleri" hint="Varsayılan başlangıç ve bitiş">
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <input type="time" value={pSettings.standardStart ?? "08:00"} onChange={(e) => commitProjectSetting({ standardStart: e.target.value })} style={{ flex: 1 }} />
+                <input type="time" value={pSettings.standardStart} onChange={(e) => commitProjectSetting({ standardStart: e.target.value })} style={{ flex: 1 }} />
                 <span style={{ color: T.dim2 }}>–</span>
-                <input type="time" value={pSettings.standardEnd ?? "17:00"} onChange={(e) => commitProjectSetting({ standardEnd: e.target.value })} style={{ flex: 1 }} />
+                <input type="time" value={pSettings.standardEnd} onChange={(e) => commitProjectSetting({ standardEnd: e.target.value })} style={{ flex: 1 }} />
               </div>
             </Field>
+
+            <Field T={T} label="Günlük mola saati" hint="Toplam çalışma süresinden düşülür">
+              <input type="number" step="0.25" min="0" value={pSettings.dailyBreakHours} onChange={(e) => commitProjectSetting({ dailyBreakHours: Number(e.target.value) })} style={{ width: "100%" }} />
+            </Field>
+
+            <Field T={T} label="Fazla mesai çarpanı" hint="Standart saati aşan mesaiye uygulanır (örn. 1.5)">
+              <input type="number" step="0.1" value={pSettings.otMultiplier} onChange={(e) => commitProjectSetting({ otMultiplier: Number(e.target.value) })} style={{ width: "100%" }} />
+            </Field>
+
+            <Field T={T} label="Resmi tatil / hafta tatili çarpanı" hint="Tatil günleri tüm mesaiye uygulanır (örn. 2)">
+              <input type="number" step="0.1" value={pSettings.holidayMultiplier} onChange={(e) => commitProjectSetting({ holidayMultiplier: Number(e.target.value) })} style={{ width: "100%" }} />
+            </Field>
+
+            <hr style={{ borderColor: T.border, margin: "16px 0", opacity: 0.5 }} />
+
+            <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, textTransform: "uppercase", marginBottom: 10 }}>Yol Ücreti Ayarları</div>
+
+            <Field T={T} label="Gidiş Yol Ücreti (₺)" hint="Günlük gidiş için varsayılan yol parası">
+              <input type="number" value={pSettings.transportGo} onChange={(e) => commitProjectSetting({ transportGo: Number(e.target.value) })} style={{ width: "100%" }} />
+            </Field>
+
+            <Field T={T} label="Geliş Yol Ücreti (₺)" hint="Günlük dönüş için varsayılan yol parası">
+              <input type="number" value={pSettings.transportReturn} onChange={(e) => commitProjectSetting({ transportReturn: Number(e.target.value) })} style={{ width: "100%" }} />
+            </Field>
           </div>
-
-          {/* Genel Çarpanlar */}
-          <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, textTransform: "uppercase", marginBottom: 10 }}>Genel Hesaplama Ayarları</div>
-
-          <Field T={T} label="Günlük mola saati" hint="Bu süre, çalışılan gün toplamından otomatik düşülür">
-            <div style={{ position: "relative" }}>
-              <input type="number" step="0.25" min="0" value={local.dailyBreakHours} onChange={(e) => commit({ dailyBreakHours: Number(e.target.value) })} style={{ width: "100%", paddingRight: 36 }} />
-              <Icon name="coffee" size={14} color={T.dim2} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)" }} />
-            </div>
-          </Field>
-
-          <Field T={T} label="Fazla mesai çarpanı" hint="Standart net saati aşan çalışmaya uygulanır (örn. 1.5)">
-            <input type="number" step="0.1" value={local.otMultiplier} onChange={(e) => commit({ otMultiplier: Number(e.target.value) })} style={{ width: "100%" }} />
-          </Field>
-
-          <Field T={T} label="Resmi tatil / hafta tatili çarpanı" hint="O gün işaretlendiğinde tüm kazanca uygulanır (örn. 2)">
-            <input type="number" step="0.1" value={local.holidayMultiplier} onChange={(e) => commit({ holidayMultiplier: Number(e.target.value) })} style={{ width: "100%" }} />
-          </Field>
 
           <div style={{ marginTop: 14, background: T.surface, border: `1px solid ${T.border}`, borderTop: `2px solid ${T.accent}`, borderRadius: 16, padding: "14px 16px", boxShadow: T.shadow, marginBottom: 20 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
@@ -780,7 +813,7 @@
       return (
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 2 }}>{label}</div>
-          <div style={{ fontSize: 11.5, color: T.dim2, marginBottom: 7 }}>{hint}</div>
+          {hint && <div style={{ fontSize: 11.5, color: T.dim2, marginBottom: 7 }}>{hint}</div>}
           {children}
         </div>
       );
@@ -849,37 +882,58 @@
     /* ---------------- Day sheet ---------------- */
     function DaySheet({ T, dateKey, entry, settings, onClose, onSave }) {
       const [worked, setWorked] = useState(entry?.worked ?? false);
-      
-      const activeProjName = entry?.project || settings.activeProject || settings.projects?.[0] || "Genel Proje";
-      const pSettings = settings.projectSettings?.[activeProjName] || {
-        dailyWage: settings.dailyWage,
-        standardStart: settings.standardStart,
-        standardEnd: settings.standardEnd
-      };
+      const [project, setProject] = useState(entry?.project || settings.activeProject || settings.projects?.[0] || "Genel Proje");
 
-      const defaultStart = pSettings.standardStart || "08:00";
-      const defaultEnd = pSettings.standardEnd || "17:00";
+      const pSet = getProjectSettings(project, settings);
+
+      const defaultStart = pSet.standardStart || "08:00";
+      const defaultEnd = pSet.standardEnd || "17:00";
 
       const [ranges, setRanges] = useState(entry?.ranges?.length ? entry.ranges : [{ start: defaultStart, end: defaultEnd }]);
       const [holiday, setHoliday] = useState(entry?.holiday ?? false);
-      const [project, setProject] = useState(activeProjName);
+
+      // Yol ücreti durumları
+      const [includeTransportGo, setIncludeTransportGo] = useState(entry?.includeTransportGo ?? true);
+      const [transportGoVal, setTransportGoVal] = useState(entry?.transportGoVal ?? pSet.transportGo);
+
+      const [includeTransportReturn, setIncludeTransportReturn] = useState(entry?.includeTransportReturn ?? true);
+      const [transportReturnVal, setTransportReturnVal] = useState(entry?.transportReturnVal ?? pSet.transportReturn);
 
       const [y, m, d] = dateKey.split("-").map(Number);
       const dateObj = new Date(y, m - 1, d);
       const niceDate = `${d} ${MONTHS[m - 1]} ${y}, ${dateObj.toLocaleDateString("tr-TR", { weekday: "long" })}`;
 
+      // Yol ücreti toplamı
+      let currentTransportPay = 0;
+      if (includeTransportGo) currentTransportPay += Number(transportGoVal || 0);
+      if (includeTransportReturn) currentTransportPay += Number(transportReturnVal || 0);
+
       const rawHours = totalHoursOf(worked ? ranges : []);
-      const p = payOf(rawHours, holiday, settings);
+      const p = payOf(rawHours, holiday, pSet, currentTransportPay);
 
       const toggleWorked = () => {
         const next = !worked;
         setWorked(next);
         if (next && ranges.length === 0) setRanges([{ start: defaultStart, end: defaultEnd }]);
       };
+
+      const handleProjectChange = (pName) => {
+        setProject(pName);
+        const newPSet = getProjectSettings(pName, settings);
+        setRanges([{ start: newPSet.standardStart, end: newPSet.standardEnd }]);
+        setTransportGoVal(newPSet.transportGo);
+        setTransportReturnVal(newPSet.transportReturn);
+      };
+
       const updateRange = (i, field, val) => setRanges((rs) => rs.map((r, idx) => (idx === i ? { ...r, [field]: val } : r)));
       const removeRange = (i) => setRanges((rs) => rs.filter((_, idx) => idx !== i));
-      const addRange = () => setRanges((rs) => [...rs, { start: defaultEnd, end: "20:00" }]);
-      const save = () => onSave({ worked, ranges, holiday, project });
+      const addRange = () => setRanges((rs) => [...rs, { start: pSet.standardEnd, end: "20:00" }]);
+      
+      const save = () => onSave({
+        worked, ranges, holiday, project,
+        includeTransportGo, transportGoVal: Number(transportGoVal),
+        includeTransportReturn, transportReturnVal: Number(transportReturnVal)
+      });
 
       return (
         <SheetShell T={T} onClose={onClose} eyebrow="Gün detayı" title={niceDate}>
@@ -890,14 +944,15 @@
               <Row T={T} label="Resmi tatil / hafta tatili"><Toggle T={T} checked={holiday} onChange={() => setHoliday((h) => !h)} /></Row>
               
               <div style={{ padding: "10px 0", borderBottom: `1px solid ${T.border}` }}>
-                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Proje</div>
-                <select value={project} onChange={(e) => setProject(e.target.value)} style={{ width: "100%" }}>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Proje Seçimi</div>
+                <select value={project} onChange={(e) => handleProjectChange(e.target.value)} style={{ width: "100%" }}>
                   {(settings.projects || ["Genel Proje"]).map((pName) => (
                     <option key={pName} value={pName}>{pName}</option>
                   ))}
                 </select>
               </div>
 
+              {/* Çalışma Saatleri */}
               <div style={{ marginTop: 14 }}>
                 <div style={{ fontSize: 12, color: T.dim2, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Çalışma Saatleri</div>
                 {ranges.map((r, i) => (
@@ -917,15 +972,47 @@
                 </button>
               </div>
 
+              {/* Yol Ücreti Bölümü */}
+              <div style={{ marginTop: 16, borderTop: `1px solid ${T.border}`, paddingTop: 12 }}>
+                <div style={{ fontSize: 12, color: T.dim2, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>Yol Ücreti</div>
+                
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Toggle T={T} checked={includeTransportGo} onChange={() => setIncludeTransportGo(!includeTransportGo)} />
+                    <span style={{ fontSize: 13.5, fontWeight: 600 }}>Gidiş Yol Ücreti</span>
+                  </div>
+                  {includeTransportGo && (
+                    <input type="number" value={transportGoVal} onChange={(e) => setTransportGoVal(e.target.value)} style={{ width: 80, padding: "6px 8px", textAlign: "right" }} />
+                  )}
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Toggle T={T} checked={includeTransportReturn} onChange={() => setIncludeTransportReturn(!includeTransportReturn)} />
+                    <span style={{ fontSize: 13.5, fontWeight: 600 }}>Geliş Yol Ücreti</span>
+                  </div>
+                  {includeTransportReturn && (
+                    <input type="number" value={transportReturnVal} onChange={(e) => setTransportReturnVal(e.target.value)} style={{ width: 80, padding: "6px 8px", textAlign: "right" }} />
+                  )}
+                </div>
+              </div>
+
+              {/* Özet Kartı */}
               <div style={{ marginTop: 16, background: T.surface2, borderRadius: 12, padding: 12, border: `1px solid ${T.border}` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: T.dim, marginBottom: 4 }}>
-                  <span>Net Saat:</span>
+                  <span>Net Saat ({pSet.dailyBreakHours}s Mola):</span>
                   <span className="mono" style={{ color: T.text, fontWeight: 600 }}>{fmtHours(p.netHours)}</span>
                 </div>
                 {p.otHours > 0 && (
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: T.ot, marginBottom: 4 }}>
-                    <span>Fazla Mesai:</span>
+                    <span>Fazla Mesai ({pSet.otMultiplier}x):</span>
                     <span className="mono" style={{ fontWeight: 600 }}>{fmtHours(p.otHours)}</span>
+                  </div>
+                )}
+                {currentTransportPay > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: T.normal, marginBottom: 4 }}>
+                    <span>Toplam Yol Ücreti:</span>
+                    <span className="mono" style={{ fontWeight: 600 }}>+{fmtMoney(currentTransportPay)}</span>
                   </div>
                 )}
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 700, marginTop: 6, paddingTop: 6, borderTop: `1px solid ${T.border}` }}>
