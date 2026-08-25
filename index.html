@@ -26,8 +26,8 @@
   <script type="text/babel">
     const { useState, useEffect, useMemo, useRef } = React;
 
-    // Sabit Uygulama Şifresi
-    const APP_PASSWORD = "183927";
+    // Varsayılan Başlangıç Parolası
+    const DEFAULT_APP_PASSWORD = "183927";
 
     // --- Lucide Icon Entegrasyonu ---
     const Icon = ({ name, size = 20, color = "currentColor", strokeWidth = 2, style = {} }) => {
@@ -133,7 +133,7 @@
 
     /* ---------------- Storage ---------------- */
     function loadAll() {
-      const out = { settings: DEFAULT_SETTINGS, entries: {}, profile: DEFAULT_PROFILE, theme: "dark" };
+      const out = { settings: DEFAULT_SETTINGS, entries: {}, profile: DEFAULT_PROFILE, theme: "dark", password: DEFAULT_APP_PASSWORD };
       try { 
         const s = localStorage.getItem("yevmiye:settings"); 
         if (s) {
@@ -144,16 +144,19 @@
       try { const en = localStorage.getItem("yevmiye:entries"); if (en) out.entries = JSON.parse(en); } catch (e) {}
       try { const pr = localStorage.getItem("yevmiye:profile"); if (pr) out.profile = { ...DEFAULT_PROFILE, ...JSON.parse(pr) }; } catch (e) {}
       try { const th = localStorage.getItem("yevmiye:theme"); if (th) out.theme = JSON.parse(th); } catch (e) {}
+      try { const pw = localStorage.getItem("yevmiye:password"); if (pw) out.password = JSON.parse(pw); } catch (e) {}
       return out;
     }
     const saveSettings = (v) => localStorage.setItem("yevmiye:settings", JSON.stringify(v));
     const saveEntries = (v) => localStorage.setItem("yevmiye:entries", JSON.stringify(v));
     const saveProfile = (v) => localStorage.setItem("yevmiye:profile", JSON.stringify(v));
     const saveTheme = (v) => localStorage.setItem("yevmiye:theme", JSON.stringify(v));
+    const savePassword = (v) => localStorage.setItem("yevmiye:password", JSON.stringify(v));
 
     /* ---------------- App ---------------- */
     function App() {
       const [isAuthenticated, setIsAuthenticated] = useState(false);
+      const [appPassword, setAppPassword] = useState(DEFAULT_APP_PASSWORD);
       const [loading, setLoading] = useState(true);
       const [tab, setTab] = useState("home");
       const [cursor, setCursor] = useState(() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; });
@@ -177,6 +180,7 @@
         setEntries(d.entries);
         setProfile(d.profile);
         setThemeMode(d.theme);
+        setAppPassword(d.password);
         setLoading(false);
       }, []);
 
@@ -203,6 +207,11 @@
         } else {
           setTab(nextTab);
         }
+      };
+
+      const handlePasswordChange = (newPw) => {
+        setAppPassword(newPw);
+        savePassword(newPw);
       };
 
       const grid = useMemo(() => {
@@ -263,7 +272,7 @@
 
       // Şifre Giriş Ekranı
       if (!isAuthenticated) {
-        return <AuthScreen T={T} onSuccess={() => setIsAuthenticated(true)} />;
+        return <AuthScreen T={T} currentPassword={appPassword} onSuccess={() => setIsAuthenticated(true)} />;
       }
 
       return (
@@ -313,6 +322,8 @@
                 isDirty={isDirty}
                 themeMode={themeMode}
                 setThemeMode={(m) => { setThemeMode(m); saveTheme(m); }}
+                currentPassword={appPassword}
+                onUpdatePassword={handlePasswordChange}
               />
             )}
           </div>
@@ -363,13 +374,13 @@
     }
 
     /* ---------------- Şifre Giriş Ekranı (Auth) ---------------- */
-    function AuthScreen({ T, onSuccess }) {
+    function AuthScreen({ T, currentPassword, onSuccess }) {
       const [inputPass, setInputPass] = useState("");
       const [error, setError] = useState(false);
 
       const handleLogin = (e) => {
         e.preventDefault();
-        if (inputPass === APP_PASSWORD) {
+        if (inputPass === currentPassword) {
           onSuccess();
         } else {
           setError(true);
@@ -712,9 +723,14 @@
     }
 
     /* ---------------- Settings tab ---------------- */
-    const SettingsTab = React.forwardRef(({ T, settings, onSaveSettings, setIsDirty, isDirty, themeMode, setThemeMode }, ref) => {
+    const SettingsTab = React.forwardRef(({ T, settings, onSaveSettings, setIsDirty, isDirty, themeMode, setThemeMode, currentPassword, onUpdatePassword }, ref) => {
       const [local, setLocal] = useState(settings);
       const [newProj, setNewProj] = useState("");
+
+      // Şifre Değiştirme State'leri
+      const [oldPassInput, setOldPassInput] = useState("");
+      const [newPassInput, setNewPassInput] = useState("");
+      const [passMsg, setPassMsg] = useState({ type: "", text: "" });
 
       useEffect(() => {
         setLocal(settings);
@@ -745,6 +761,22 @@
 
       const handleSave = () => {
         onSaveSettings(local);
+      };
+
+      const handlePasswordUpdate = (e) => {
+        e.preventDefault();
+        if (oldPassInput !== currentPassword) {
+          setPassMsg({ type: "error", text: "Mevcut şifreniz hatalı!" });
+          return;
+        }
+        if (!newPassInput.trim() || newPassInput.length < 4) {
+          setPassMsg({ type: "error", text: "Yeni şifre en az 4 karakter olmalıdır." });
+          return;
+        }
+        onUpdatePassword(newPassInput.trim());
+        setOldPassInput("");
+        setNewPassInput("");
+        setPassMsg({ type: "success", text: "Uygulama şifresi başarıyla güncellendi!" });
       };
 
       React.useImperativeHandle(ref, () => ({
@@ -797,6 +829,27 @@
                 </button>
               );
             })}
+          </div>
+
+          {/* Şifre Değiştirme Alanı */}
+          <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, textTransform: "uppercase", marginBottom: 10 }}>Uygulama Parolası</div>
+          <div style={{ background: T.surface2, border: `1px solid ${T.border}`, borderRadius: 16, padding: 16, marginBottom: 22 }}>
+            <form onSubmit={handlePasswordUpdate}>
+              <Field T={T} label="Mevcut Şifre" hint="Şu an kullandığınız parola">
+                <input type="password" placeholder="Mevcut şifre..." value={oldPassInput} onChange={(e) => { setOldPassInput(e.target.value); setPassMsg({ type: "", text: "" }); }} style={{ width: "100%" }} />
+              </Field>
+              <Field T={T} label="Yeni Şifre" hint="En az 4 haneli yeni parola belirleyin">
+                <input type="password" placeholder="Yeni şifre..." value={newPassInput} onChange={(e) => { setNewPassInput(e.target.value); setPassMsg({ type: "", text: "" }); }} style={{ width: "100%" }} />
+              </Field>
+              {passMsg.text && (
+                <div style={{ fontSize: 12.5, color: passMsg.type === "error" ? T.danger : T.normal, fontWeight: 600, marginBottom: 10 }}>
+                  {passMsg.text}
+                </div>
+              )}
+              <button type="submit" style={{ width: "100%", background: T.surface3, color: T.text, border: `1px solid ${T.border}`, borderRadius: 10, padding: "10px 0", fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}>
+                Şifreyi Güncelle
+              </button>
+            </form>
           </div>
 
           <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, textTransform: "uppercase", marginBottom: 10 }}>Projeler Yönetimi</div>
