@@ -26,6 +26,9 @@
   <script type="text/babel">
     const { useState, useEffect, useMemo, useRef } = React;
 
+    // Sabit Uygulama Şifresi
+    const APP_PASSWORD = "183927";
+
     // --- Lucide Icon Entegrasyonu ---
     const Icon = ({ name, size = 20, color = "currentColor", strokeWidth = 2, style = {} }) => {
       const ref = useRef(null);
@@ -75,7 +78,6 @@
       return (ranges || []).reduce((sum, r) => sum + rangeHours(r.start, r.end), 0);
     }
 
-    // Projeye Özel Ayarları Getiren Yardımcı Fonksiyon
     function getProjectSettings(pName, settings) {
       const p = settings.projectSettings?.[pName] || {};
       return {
@@ -129,7 +131,7 @@
     };
     const DEFAULT_PROFILE = { firstName: "", lastName: "" };
 
-    /* ---------------- Storage (LocalStorage) ---------------- */
+    /* ---------------- Storage ---------------- */
     function loadAll() {
       const out = { settings: DEFAULT_SETTINGS, entries: {}, profile: DEFAULT_PROFILE, theme: "dark" };
       try { 
@@ -151,6 +153,7 @@
 
     /* ---------------- App ---------------- */
     function App() {
+      const [isAuthenticated, setIsAuthenticated] = useState(false);
       const [loading, setLoading] = useState(true);
       const [tab, setTab] = useState("home");
       const [cursor, setCursor] = useState(() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; });
@@ -161,7 +164,6 @@
       const [selectedKey, setSelectedKey] = useState(null);
       const [profileOpen, setProfileOpen] = useState(false);
 
-      // Guard Modal durumları
       const [isDirty, setIsDirty] = useState(false);
       const [pendingTab, setPendingTab] = useState(null);
       const [showGuardModal, setShowGuardModal] = useState(false);
@@ -259,13 +261,18 @@
         );
       }
 
+      // Şifre Giriş Ekranı
+      if (!isAuthenticated) {
+        return <AuthScreen T={T} onSuccess={() => setIsAuthenticated(true)} />;
+      }
+
       return (
         <div style={{ background: T.bg, color: T.text, height: "100vh", display: "flex", flexDirection: "column", fontFamily: "-apple-system, system-ui, sans-serif", transition: "background .2s ease, color .2s ease" }}>
           <style>{`
             * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
             .mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
             .scrollarea::-webkit-scrollbar { display: none; }
-            input[type="time"], input[type="number"], input[type="text"], select {
+            input[type="time"], input[type="number"], input[type="text"], input[type="password"], select {
               background: ${T.surface3}; color: ${T.text}; border: 1px solid ${T.border};
               border-radius: 10px; padding: 9px 11px; font-size: 15px; font-family: inherit; outline: none;
             }
@@ -287,6 +294,7 @@
                 onGoSummary={() => handleTabChange("summary")}
                 onOpenToday={() => setSelectedKey(todayKey())}
                 todayEntry={entries[todayKey()]}
+                onLock={() => setIsAuthenticated(false)}
               />
             )}
             {tab === "calendar" && (
@@ -311,7 +319,6 @@
 
           <TabBar T={T} tab={tab} setTab={handleTabChange} />
 
-          {/* Kaydetmeden Çıkma Modal */}
           {showGuardModal && (
             <GuardModal
               T={T}
@@ -351,6 +358,73 @@
             <ProfileSheet T={T} profile={profile} onClose={() => setProfileOpen(false)}
               onSave={(p) => { setProfile(p); saveProfile(p); setProfileOpen(false); }} />
           )}
+        </div>
+      );
+    }
+
+    /* ---------------- Şifre Giriş Ekranı (Auth) ---------------- */
+    function AuthScreen({ T, onSuccess }) {
+      const [inputPass, setInputPass] = useState("");
+      const [error, setError] = useState(false);
+
+      const handleLogin = (e) => {
+        e.preventDefault();
+        if (inputPass === APP_PASSWORD) {
+          onSuccess();
+        } else {
+          setError(true);
+          setInputPass("");
+        }
+      };
+
+      return (
+        <div style={{ background: T.bg, color: T.text, height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: "-apple-system, system-ui, sans-serif" }}>
+          <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 24, padding: "32px 24px", width: "100%", maxWidth: 360, textAlign: "center", boxShadow: T.shadow }}>
+            <div style={{ width: 60, height: 60, borderRadius: "50%", background: T.surface2, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px", color: T.accent }}>
+              <Icon name="lock" size={28} color={T.accent} />
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Giriş Yapın</div>
+            <div style={{ fontSize: 13, color: T.dim, marginBottom: 24 }}>Uygulamaya erişmek için şifrenizi girin.</div>
+            
+            <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <input
+                type="password"
+                placeholder="Parola..."
+                value={inputPass}
+                onChange={(e) => { setInputPass(e.target.value); setError(false); }}
+                style={{
+                  width: "100%",
+                  textAlign: "center",
+                  fontSize: 20,
+                  letterSpacing: 4,
+                  background: T.surface2,
+                  color: T.text,
+                  border: `1px solid ${error ? T.danger : T.border}`,
+                  borderRadius: 14,
+                  padding: "12px 14px",
+                  outline: "none"
+                }}
+                autoFocus
+              />
+              {error && <div style={{ fontSize: 12.5, color: T.danger, fontWeight: 600 }}>Hatalı parola! Tekrar deneyin.</div>}
+              <button
+                type="submit"
+                style={{
+                  width: "100%",
+                  background: T.accent,
+                  color: T.accentText,
+                  border: "none",
+                  borderRadius: 14,
+                  padding: "14px 0",
+                  fontSize: 15,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  marginTop: 4
+                }}>
+                Giriş Yap
+              </button>
+            </form>
+          </div>
         </div>
       );
     }
@@ -415,7 +489,7 @@
     const navBtnStyle = (T) => ({ background: T.surface2, border: `1px solid ${T.border}`, borderRadius: 10, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" });
 
     /* ---------------- Home tab ---------------- */
-    function HomeTab({ T, themeMode, toggleTheme, profile, monthLabel, monthSummary, onEditProfile, onGoCalendar, onGoSummary, onOpenToday, todayEntry }) {
+    function HomeTab({ T, themeMode, toggleTheme, profile, monthLabel, monthSummary, onEditProfile, onGoCalendar, onGoSummary, onOpenToday, todayEntry, onLock }) {
       const hasName = profile.firstName || profile.lastName;
       const fullName = hasName ? `${profile.firstName} ${profile.lastName}`.trim() : "İsim eklenmedi";
 
@@ -439,9 +513,14 @@
                 <div style={{ fontSize: 12.5, color: T.dim }}>Merhaba,</div>
                 <div style={{ fontSize: 18, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fullName}</div>
               </div>
-              <button onClick={onEditProfile} style={{ background: T.surface2, border: `1px solid ${T.border}`, borderRadius: 10, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
-                <Icon name="pencil" size={14} color={T.dim} />
-              </button>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={onEditProfile} style={{ background: T.surface2, border: `1px solid ${T.border}`, borderRadius: 10, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+                  <Icon name="pencil" size={14} color={T.dim} />
+                </button>
+                <button onClick={onLock} title="Uygulamayı Kilitle" style={{ background: T.surface2, border: `1px solid ${T.border}`, borderRadius: 10, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+                  <Icon name="log-out" size={14} color={T.danger} />
+                </button>
+              </div>
             </div>
           </div>
 
@@ -571,7 +650,6 @@
               <ReceiptRow T={T} label="TOPLAM KAZANÇ" value={fmtMoney(pay)} big />
             </div>
 
-            {/* Proje Bazlı Özet */}
             {Object.keys(projectMap).length > 0 && (
               <div style={{ padding: "0 16px", marginBottom: 18 }}>
                 <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, marginBottom: 8, paddingLeft: 2 }}>PROJE BAZLI KAZANÇ</div>
@@ -589,7 +667,6 @@
               </div>
             )}
 
-            {/* Günlük Döküm */}
             <div style={{ padding: "0 16px" }}>
               <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, marginBottom: 8, paddingLeft: 2 }}>GÜNLÜK DÖKÜM</div>
               {monthEntries.length === 0 && <div style={{ color: T.dim, fontSize: 13.5, padding: "20px 4px" }}>Bu ay için henüz çalışma günü eklenmedi.</div>}
@@ -708,7 +785,6 @@
           <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Ayarlar</div>
           <div style={{ fontSize: 13, color: T.dim, marginBottom: 20 }}>Tüm çalışma ve hesaplama parametrelerinizi özelleştirin.</div>
 
-          {/* Görünüm */}
           <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, textTransform: "uppercase", marginBottom: 10 }}>Görünüm</div>
           <div style={{ display: "flex", gap: 8, marginBottom: 22 }}>
             {[{ id: "dark", label: "Koyu", icon: "moon" }, { id: "light", label: "Açık", icon: "sun" }].map(({ id, label, icon }) => {
@@ -723,7 +799,6 @@
             })}
           </div>
 
-          {/* Projeler Listesi */}
           <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, textTransform: "uppercase", marginBottom: 10 }}>Projeler Yönetimi</div>
           <div style={{ marginBottom: 22 }}>
             <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
@@ -747,7 +822,6 @@
             </div>
           </div>
 
-          {/* Seçili Projeye Özel Tüm Ayarlar */}
           <div style={{ background: T.surface2, border: `1px solid ${T.border}`, borderRadius: 16, padding: 16, marginBottom: 20 }}>
             <div style={{ fontSize: 12, letterSpacing: 1, color: T.accent, fontWeight: 700, textTransform: "uppercase", marginBottom: 14 }}>
               "{activeProjName}" Özel Ayarları
@@ -801,7 +875,6 @@
             </div>
           </div>
 
-          {/* KAYDET BUTONU */}
           <button onClick={handleSave} style={{ width: "100%", background: isDirty ? T.accent : T.surface3, color: isDirty ? T.accentText : T.dim, border: "none", borderRadius: 14, padding: "14px 0", fontSize: 15, fontWeight: 700, cursor: isDirty ? "pointer" : "default", transition: "all .2s ease" }}>
             {isDirty ? "Ayarları Kaydet" : "Ayarlar Güncel"}
           </button>
@@ -892,7 +965,6 @@
       const [ranges, setRanges] = useState(entry?.ranges?.length ? entry.ranges : [{ start: defaultStart, end: defaultEnd }]);
       const [holiday, setHoliday] = useState(entry?.holiday ?? false);
 
-      // Yol ücreti durumları
       const [includeTransportGo, setIncludeTransportGo] = useState(entry?.includeTransportGo ?? true);
       const [transportGoVal, setTransportGoVal] = useState(entry?.transportGoVal ?? pSet.transportGo);
 
@@ -903,7 +975,6 @@
       const dateObj = new Date(y, m - 1, d);
       const niceDate = `${d} ${MONTHS[m - 1]} ${y}, ${dateObj.toLocaleDateString("tr-TR", { weekday: "long" })}`;
 
-      // Yol ücreti toplamı
       let currentTransportPay = 0;
       if (includeTransportGo) currentTransportPay += Number(transportGoVal || 0);
       if (includeTransportReturn) currentTransportPay += Number(transportReturnVal || 0);
@@ -952,7 +1023,6 @@
                 </select>
               </div>
 
-              {/* Çalışma Saatleri */}
               <div style={{ marginTop: 14 }}>
                 <div style={{ fontSize: 12, color: T.dim2, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Çalışma Saatleri</div>
                 {ranges.map((r, i) => (
@@ -972,7 +1042,6 @@
                 </button>
               </div>
 
-              {/* Yol Ücreti Bölümü */}
               <div style={{ marginTop: 16, borderTop: `1px solid ${T.border}`, paddingTop: 12 }}>
                 <div style={{ fontSize: 12, color: T.dim2, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>Yol Ücreti</div>
                 
@@ -997,7 +1066,6 @@
                 </div>
               </div>
 
-              {/* Özet Kartı */}
               <div style={{ marginTop: 16, background: T.surface2, borderRadius: 12, padding: 12, border: `1px solid ${T.border}` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: T.dim, marginBottom: 4 }}>
                   <span>Net Saat ({pSet.dailyBreakHours}s Mola):</span>
