@@ -11,6 +11,13 @@
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     body { margin: 0; padding: 0; }
+    
+    @media print {
+      body * { visibility: hidden; }
+      #printable-area, #printable-area * { visibility: visible; }
+      #printable-area { position: absolute; left: 0; top: 0; width: 100%; color: #000 !important; background: #fff !important; }
+      .no-print { display: none !important; }
+    }
   </style>
 </head>
 <body>
@@ -84,7 +91,15 @@
     const fmtHours = (n) => (isFinite(n) ? n : 0).toLocaleString("tr-TR", { maximumFractionDigits: 1 }) + " sa";
     const initialsOf = (f, l) => `${(f || "").trim()[0] || ""}${(l || "").trim()[0] || ""}`.toUpperCase() || "?";
 
-    const DEFAULT_SETTINGS = { dailyWage: 1000, standardStart: "08:00", standardEnd: "17:00", dailyBreakHours: 1, otMultiplier: 1.5, holidayMultiplier: 2 };
+    const DEFAULT_SETTINGS = { 
+      dailyWage: 1000, 
+      standardStart: "08:00", 
+      standardEnd: "17:00", 
+      dailyBreakHours: 1, 
+      otMultiplier: 1.5, 
+      holidayMultiplier: 2,
+      projects: ["Genel Proje", "Saha Çalışması", "Atölye"]
+    };
     const DEFAULT_PROFILE = { firstName: "", lastName: "" };
 
     /* ---------------- Storage (LocalStorage) ---------------- */
@@ -162,12 +177,22 @@
 
       const monthSummary = useMemo(() => {
         let days = 0, normal = 0, ot = 0, pay = 0;
+        const projectMap = {};
+
         for (const [, v] of monthEntries) {
           const th = totalHoursOf(v.ranges);
           const p = payOf(th, v.holiday, settings);
           days += 1; normal += p.normalHours; ot += p.otHours; pay += p.finalPay;
+
+          const proj = v.project || "Belirtilmedi";
+          if (!projectMap[proj]) {
+            projectMap[proj] = { days: 0, pay: 0, hours: 0 };
+          }
+          projectMap[proj].days += 1;
+          projectMap[proj].pay += p.finalPay;
+          projectMap[proj].hours += p.netHours;
         }
-        return { days, normal, ot, pay };
+        return { days, normal, ot, pay, projectMap };
       }, [monthEntries, settings]);
 
       const persistEntries = (next) => { setEntries(next); saveEntries(next); };
@@ -186,11 +211,11 @@
             * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
             .mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
             .scrollarea::-webkit-scrollbar { display: none; }
-            input[type="time"], input[type="number"], input[type="text"] {
+            input[type="time"], input[type="number"], input[type="text"], select {
               background: ${T.surface3}; color: ${T.text}; border: 1px solid ${T.border};
               border-radius: 10px; padding: 9px 11px; font-size: 15px; font-family: inherit; outline: none;
             }
-            input:focus { border-color: ${T.accent}; }
+            input:focus, select:focus { border-color: ${T.accent}; }
             input[type="time"]::-webkit-calendar-picker-indicator { filter: ${T.mode === "dark" ? "invert(0.75)" : "none"}; }
             .tabbtn { transition: color .15s ease; }
             .sheet { animation: slideUp .22s ease; }
@@ -214,7 +239,7 @@
               <CalendarTab T={T} cursor={cursor} monthLabel={monthLabel} changeMonth={changeMonth} grid={grid} entries={entries} settings={settings} onSelect={setSelectedKey} />
             )}
             {tab === "summary" && (
-              <SummaryTab T={T} monthLabel={monthLabel} changeMonth={changeMonth} monthEntries={monthEntries} monthSummary={monthSummary} settings={settings} onSelect={setSelectedKey} />
+              <SummaryTab T={T} monthLabel={monthLabel} changeMonth={changeMonth} monthEntries={monthEntries} monthSummary={monthSummary} settings={settings} onSelect={setSelectedKey} profile={profile} />
             )}
             {tab === "settings" && (
               <SettingsTab T={T} settings={settings} onChange={(s) => { setSettings(s); saveSettings(s); }} themeMode={themeMode} setThemeMode={(m) => { setThemeMode(m); saveTheme(m); }} />
@@ -253,7 +278,7 @@
         { id: "settings", label: "Ayarlar", icon: "settings" },
       ];
       return (
-        <div style={{ borderTop: `1px solid ${T.border}`, background: T.surface, display: "flex", paddingBottom: "env(safe-area-inset-bottom, 8px)" }}>
+        <div className="no-print" style={{ borderTop: `1px solid ${T.border}`, background: T.surface, display: "flex", paddingBottom: "env(safe-area-inset-bottom, 8px)" }}>
           {items.map(({ id, label, icon }) => {
             const active = tab === id;
             return (
@@ -272,9 +297,9 @@
     function MonthNav({ T, label, changeMonth }) {
       return (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 16px 10px" }}>
-          <button onClick={() => changeMonth(-1)} style={navBtnStyle(T)}><Icon name="chevron-left" size={20} color={T.text} /></button>
+          <button onClick={() => changeMonth(-1)} className="no-print" style={navBtnStyle(T)}><Icon name="chevron-left" size={20} color={T.text} /></button>
           <div style={{ fontSize: 17, fontWeight: 700 }}>{label}</div>
-          <button onClick={() => changeMonth(1)} style={navBtnStyle(T)}><Icon name="chevron-right" size={20} color={T.text} /></button>
+          <button onClick={() => changeMonth(1)} className="no-print" style={navBtnStyle(T)}><Icon name="chevron-right" size={20} color={T.text} /></button>
         </div>
       );
     }
@@ -403,41 +428,80 @@
     }
 
     /* ---------------- Summary tab ---------------- */
-    function SummaryTab({ T, monthLabel, changeMonth, monthEntries, monthSummary, settings, onSelect }) {
-      const { days, normal, ot, pay } = monthSummary;
+    function SummaryTab({ T, monthLabel, changeMonth, monthEntries, monthSummary, settings, onSelect, profile }) {
+      const { days, normal, ot, pay, projectMap } = monthSummary;
+      const fullName = `${profile.firstName || ''} ${profile.lastName || ''}`.trim();
+
+      const printPDF = () => {
+        window.print();
+      };
+
       return (
         <div>
           <MonthNav T={T} label={monthLabel} changeMonth={changeMonth} />
-          <div style={{ margin: "8px 16px 18px", background: T.surface, border: `1px solid ${T.border}`, borderTop: `2px solid ${T.accent}`, borderRadius: 18, padding: "18px 18px 6px", boxShadow: T.shadow }}>
-            <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, marginBottom: 12 }}>AY SONU PUANTAJI</div>
-            <ReceiptRow T={T} label="Çalışılan gün" value={`${days} gün`} />
-            <ReceiptRow T={T} label="Normal saat" value={fmtHours(normal)} />
-            <ReceiptRow T={T} label="Fazla mesai" value={fmtHours(ot)} color={ot > 0 ? T.ot : undefined} />
-            <div style={{ borderTop: `1px dashed ${T.border}`, margin: "10px 0" }} />
-            <ReceiptRow T={T} label="TOPLAM KAZANÇ" value={fmtMoney(pay)} big />
+          
+          <div style={{ padding: "0 16px", marginBottom: 12 }} className="no-print">
+            <button onClick={printPDF} style={{ width: "100%", background: T.surface2, color: T.accent, border: `1px solid ${T.accent}`, borderRadius: 12, padding: "10px 0", fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, cursor: "pointer" }}>
+              <Icon name="download" size={16} color={T.accent} /> PDF / Yazdır
+            </button>
           </div>
 
-          <div style={{ padding: "0 16px" }}>
-            <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, marginBottom: 8, paddingLeft: 2 }}>GÜNLÜK DÖKÜM</div>
-            {monthEntries.length === 0 && <div style={{ color: T.dim, fontSize: 13.5, padding: "20px 4px" }}>Bu ay için henüz çalışma günü eklenmedi.</div>}
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {monthEntries.map(([k, v]) => {
-                const raw = totalHoursOf(v.ranges);
-                const p = payOf(raw, v.holiday, settings);
-                const day = Number(k.slice(-2));
-                return (
-                  <button key={k} onClick={() => onSelect(k)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: "10px 14px", cursor: "pointer" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <div className="mono" style={{ width: 30, height: 30, borderRadius: 9, background: T.surface3, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700 }}>{day}</div>
-                      <div style={{ textAlign: "left" }}>
-                        <div style={{ fontSize: 13.5, fontWeight: 600 }}>{fmtHours(p.netHours)}{p.otHours > 0 ? ` · ${fmtHours(p.otHours)} mesai` : ""}</div>
-                        {v.holiday && <div style={{ fontSize: 11, color: T.holiday }}>Tatil çarpanı uygulandı</div>}
+          <div id="printable-area">
+            <div style={{ display: "none" }} className="print-only">
+              <h2>Puantaj Raporu - {monthLabel}</h2>
+              {fullName && <p><strong>Personel:</strong> {fullName}</p>}
+            </div>
+
+            <div style={{ margin: "8px 16px 18px", background: T.surface, border: `1px solid ${T.border}`, borderTop: `2px solid ${T.accent}`, borderRadius: 18, padding: "18px 18px 6px", boxShadow: T.shadow }}>
+              <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, marginBottom: 12 }}>AY SONU PUANTAJI</div>
+              <ReceiptRow T={T} label="Çalışılan gün" value={`${days} gün`} />
+              <ReceiptRow T={T} label="Normal saat" value={fmtHours(normal)} />
+              <ReceiptRow T={T} label="Fazla mesai" value={fmtHours(ot)} color={ot > 0 ? T.ot : undefined} />
+              <div style={{ borderTop: `1px dashed ${T.border}`, margin: "10px 0" }} />
+              <ReceiptRow T={T} label="TOPLAM KAZANÇ" value={fmtMoney(pay)} big />
+            </div>
+
+            {/* --- Proje Bazlı Özet --- */}
+            {Object.keys(projectMap).length > 0 && (
+              <div style={{ padding: "0 16px", marginBottom: 18 }}>
+                <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, marginBottom: 8, paddingLeft: 2 }}>PROJE BAZLI KAZANÇ</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {Object.entries(projectMap).map(([pName, data]) => (
+                    <div key={pName} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 600 }}>{pName}</div>
+                        <div style={{ fontSize: 11.5, color: T.dim, marginTop: 2 }}>{data.days} gün · {fmtHours(data.hours)}</div>
                       </div>
+                      <div className="mono" style={{ fontSize: 15, fontWeight: 700, color: T.accent }}>{fmtMoney(data.pay)}</div>
                     </div>
-                    <div className="mono" style={{ fontSize: 14, fontWeight: 700, color: T.accent }}>{fmtMoney(p.finalPay)}</div>
-                  </button>
-                );
-              })}
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* --- Günlük Döküm --- */}
+            <div style={{ padding: "0 16px" }}>
+              <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, marginBottom: 8, paddingLeft: 2 }}>GÜNLÜK DÖKÜM</div>
+              {monthEntries.length === 0 && <div style={{ color: T.dim, fontSize: 13.5, padding: "20px 4px" }}>Bu ay için henüz çalışma günü eklenmedi.</div>}
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {monthEntries.map(([k, v]) => {
+                  const raw = totalHoursOf(v.ranges);
+                  const p = payOf(raw, v.holiday, settings);
+                  const day = Number(k.slice(-2));
+                  return (
+                    <button key={k} onClick={() => onSelect(k)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: "10px 14px", cursor: "pointer", textAlign: "left" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div className="mono" style={{ width: 30, height: 30, borderRadius: 9, background: T.surface3, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0 }}>{day}</div>
+                        <div>
+                          <div style={{ fontSize: 13.5, fontWeight: 600 }}>{fmtHours(p.netHours)}{p.otHours > 0 ? ` · ${fmtHours(p.otHours)} mesai` : ""}</div>
+                          <div style={{ fontSize: 11, color: T.dim, marginTop: 1 }}>{v.project || "Proje Belirtilmedi"} {v.holiday ? " • Tatil Çarpanı" : ""}</div>
+                        </div>
+                      </div>
+                      <div className="mono" style={{ fontSize: 14, fontWeight: 700, color: T.accent }}>{fmtMoney(p.finalPay)}</div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </div>
@@ -456,11 +520,30 @@
     /* ---------------- Settings tab ---------------- */
     function SettingsTab({ T, settings, onChange, themeMode, setThemeMode }) {
       const [local, setLocal] = useState(settings);
+      const [newProj, setNewProj] = useState("");
+
       useEffect(() => setLocal(settings), [settings]);
       const commit = (patch) => setLocal((l) => ({ ...l, ...patch }));
       const blur = () => onChange(local);
       const standardNet = Math.max(rangeHours(local.standardStart, local.standardEnd) - local.dailyBreakHours, 0.01);
       const hourlyRate = local.dailyWage / standardNet;
+
+      const addProject = () => {
+        if (!newProj.trim()) return;
+        const list = local.projects || [];
+        if (!list.includes(newProj.trim())) {
+          const next = [...list, newProj.trim()];
+          commit({ projects: next });
+          onChange({ ...local, projects: next });
+        }
+        setNewProj("");
+      };
+
+      const removeProject = (pName) => {
+        const list = (local.projects || []).filter((p) => p !== pName);
+        commit({ projects: list });
+        onChange({ ...local, projects: list });
+      };
 
       return (
         <div style={{ padding: "18px 16px" }}>
@@ -481,13 +564,31 @@
             })}
           </div>
 
-          <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, textTransform: "uppercase", marginBottom: 10 }}>Ücretlendirme</div>
+          <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, textTransform: "uppercase", marginBottom: 10 }}>Projeler</div>
+          <div style={{ marginBottom: 22 }}>
+            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+              <input type="text" placeholder="Yeni proje adı..." value={newProj} onChange={(e) => setNewProj(e.target.value)} style={{ flex: 1 }} />
+              <button onClick={addProject} style={{ background: T.accent, color: T.accentText, border: "none", borderRadius: 10, padding: "0 14px", fontWeight: 700, cursor: "pointer" }}>Ekle</button>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {(local.projects || []).map((p) => (
+                <div key={p} style={{ background: T.surface2, border: `1px solid ${T.border}`, borderRadius: 20, padding: "4px 10px 4px 14px", fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span>{p}</span>
+                  <button onClick={() => removeProject(p)} style={{ background: "none", border: "none", color: T.danger, cursor: "pointer", display: "flex", padding: 2 }}>
+                    <Icon name="x" size={13} color={T.danger} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, textTransform: "uppercase", marginBottom: 10 }}>Ücretlendirme & Çalışma Saatleri</div>
 
           <Field T={T} label="Günlük yevmiye (₺)" hint="Standart net mesai saatinde kazanılan tutar">
             <input type="number" value={local.dailyWage} onChange={(e) => commit({ dailyWage: Number(e.target.value) })} onBlur={blur} style={{ width: "100%" }} />
           </Field>
 
-          <Field T={T} label="Standart mesai saatleri" hint="Normal mesainizin başlangıç ve bitiş saati">
+          <Field T={T} label="Standart mesai saatleri" hint="Varsayılan başlangıç ve bitiş saatiniz">
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <input type="time" value={local.standardStart} onChange={(e) => commit({ standardStart: e.target.value })} onBlur={blur} style={{ flex: 1 }} />
               <span style={{ color: T.dim2 }}>–</span>
@@ -597,8 +698,14 @@
     /* ---------------- Day sheet ---------------- */
     function DaySheet({ T, dateKey, entry, settings, onClose, onSave }) {
       const [worked, setWorked] = useState(entry?.worked ?? false);
-      const [ranges, setRanges] = useState(entry?.ranges?.length ? entry.ranges : [{ start: "08:00", end: "17:00" }]);
+      
+      // Ayarlardaki dinamik mesai saatlerini varsayılan olarak alma
+      const defaultStart = settings.standardStart || "08:00";
+      const defaultEnd = settings.standardEnd || "17:00";
+
+      const [ranges, setRanges] = useState(entry?.ranges?.length ? entry.ranges : [{ start: defaultStart, end: defaultEnd }]);
       const [holiday, setHoliday] = useState(entry?.holiday ?? false);
+      const [project, setProject] = useState(entry?.project || (settings.projects?.[0] || "Genel Proje"));
 
       const [y, m, d] = dateKey.split("-").map(Number);
       const dateObj = new Date(y, m - 1, d);
@@ -610,12 +717,12 @@
       const toggleWorked = () => {
         const next = !worked;
         setWorked(next);
-        if (next && ranges.length === 0) setRanges([{ start: "08:00", end: "17:00" }]);
+        if (next && ranges.length === 0) setRanges([{ start: defaultStart, end: defaultEnd }]);
       };
       const updateRange = (i, field, val) => setRanges((rs) => rs.map((r, idx) => (idx === i ? { ...r, [field]: val } : r)));
       const removeRange = (i) => setRanges((rs) => rs.filter((_, idx) => idx !== i));
-      const addRange = () => setRanges((rs) => [...rs, { start: "17:30", end: "20:00" }]);
-      const save = () => onSave({ worked, ranges, holiday });
+      const addRange = () => setRanges((rs) => [...rs, { start: defaultEnd, end: "20:00" }]);
+      const save = () => onSave({ worked, ranges, holiday, project });
 
       return (
         <SheetShell T={T} onClose={onClose} eyebrow="Gün detayı" title={niceDate}>
@@ -625,6 +732,15 @@
             <>
               <Row T={T} label="Resmi tatil / hafta tatili"><Toggle T={T} checked={holiday} onChange={() => setHoliday((h) => !h)} /></Row>
               
+              <div style={{ padding: "10px 0", borderBottom: `1px solid ${T.border}` }}>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Proje</div>
+                <select value={project} onChange={(e) => setProject(e.target.value)} style={{ width: "100%" }}>
+                  {(settings.projects || ["Genel Proje"]).map((pName) => (
+                    <option key={pName} value={pName}>{pName}</option>
+                  ))}
+                </select>
+              </div>
+
               <div style={{ marginTop: 14 }}>
                 <div style={{ fontSize: 12, color: T.dim2, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Çalışma Saatleri</div>
                 {ranges.map((r, i) => (
