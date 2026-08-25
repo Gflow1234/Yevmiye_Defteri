@@ -6,18 +6,20 @@
   <title>Puantaj Uygulaması</title>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script>console.warn = function() {};</script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script src="https://unpkg.com/lucide-react/dist/umd/lucide-react.min.js"></script>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { margin: 0; background: #12161c; color: #eef0f3; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    button { font-family: inherit; }
+  </style>
 </head>
-<body style="margin:0; background:#12161c;">
+<body>
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect, useMemo, useRef } = React;
-    const { ChevronLeft, ChevronRight, Calendar: CalendarIcon, BarChart3, Settings: SettingsIcon, Plus, Trash2, X, Clock, Briefcase, FileText } = lucideReact;
+    const { useState, useEffect, useMemo } = React;
 
-    const C = { bg: "#12161c", surface: "#1a2029", surface2: "#212836", surface3: "#262f3e", border: "#2b3341", text: "#eef0f3", dim: "#8992a3", dim2: "#5c6577", accent: "#f5a623", ot: "#ff7d45", holiday: "#b28dfa", normal: "#35d0a0", danger: "#f2545b" };
+    const C = { bg: "#12161c", surface: "#1a2029", surface2: "#212836", surface3: "#262f3e", border: "#2b3341", text: "#eef0f3", dim: "#8992a3", accent: "#f5a623" };
     const WEEKDAYS = ["Pzt", "Sal", "Çrş", "Prş", "Cum", "Cmt", "Paz"];
     const MONTHS = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"];
 
@@ -25,58 +27,17 @@
     const dateKey = (y, m, d) => `${y}-${pad2(m + 1)}-${pad2(d)}`;
     const todayKey = () => { const t = new Date(); return dateKey(t.getFullYear(), t.getMonth(), t.getDate()); };
 
-    function rangeHours(start, end) {
-      if (!start || !end) return 0;
-      const [sh, sm] = start.split(":").map(Number);
-      const [eh, em] = end.split(":").map(Number);
-      let s = sh * 60 + sm, e = eh * 60 + em;
-      if (e <= s) e += 24 * 60;
-      return (e - s) / 60;
-    }
-    function totalHoursOf(ranges) { return (ranges || []).reduce((sum, r) => sum + rangeHours(r.start, r.end), 0); }
-    function payOf(totalHours, holiday, settings) {
-      const std = Math.max(settings.standardHours, 0.01);
-      const hourlyRate = settings.dailyWage / std;
-      const normalHours = Math.min(totalHours, settings.standardHours);
-      const otHours = Math.max(0, totalHours - settings.standardHours);
-      const basePay = normalHours * hourlyRate + otHours * hourlyRate * settings.otMultiplier;
-      const finalPay = holiday ? basePay * settings.holidayMultiplier : basePay;
-      return { hourlyRate, normalHours, otHours, basePay, finalPay };
-    }
-    function computeDefaultRange(standardHours) {
-      const startMinutes = 8 * 60;
-      const durationMinutes = Math.round((standardHours || 8) * 60);
-      const endMinutes = (startMinutes + durationMinutes) % (24 * 60);
-      return { start: `${pad2(Math.floor(startMinutes / 60))}:${pad2(startMinutes % 60)}`, end: `${pad2(Math.floor(endMinutes / 60))}:${pad2(endMinutes % 60)}` };
-    }
-
-    const fmtMoney = (n) => (isFinite(n) ? n : 0).toLocaleString("tr-TR", { maximumFractionDigits: 0 }) + " ₺";
-    const fmtHours = (n) => (isFinite(n) ? n : 0).toLocaleString("tr-TR", { maximumFractionDigits: 1 }) + " sa";
-    const DEFAULT_SETTINGS = { dailyWage: 1000, standardHours: 8, otMultiplier: 1.5, holidayMultiplier: 2, projects: ["Proje A", "Proje B"] };
-
-    function loadData() {
-      let settings = DEFAULT_SETTINGS, entries = {};
-      try { const s = localStorage.getItem("yevmiye:settings"); if (s) settings = { ...DEFAULT_SETTINGS, ...JSON.parse(s) }; } catch (e) {}
-      try { const en = localStorage.getItem("yevmiye:entries"); if (en) entries = JSON.parse(en); } catch (e) {}
-      return { settings, entries };
-    }
-    function saveSettings(settings) { try { localStorage.setItem("yevmiye:settings", JSON.stringify(settings)); } catch (e) {} }
-    function saveEntries(entries) { try { localStorage.setItem("yevmiye:entries", JSON.stringify(entries)); } catch (e) {} }
-
     function App() {
-      const [loading, setLoading] = useState(true);
       const [tab, setTab] = useState("calendar");
       const [cursor, setCursor] = useState(() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; });
-      const [entries, setEntries] = useState({});
-      const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+      const [entries, setEntries] = useState(() => {
+        try { return JSON.parse(localStorage.getItem("yevmiye:entries")) || {}; } catch (e) { return {}; }
+      });
+      const [dailyWage, setDailyWage] = useState(() => {
+        try { return Number(localStorage.getItem("yevmiye:wage")) || 1000; } catch (e) { return 1000; }
+      });
       const [selectedKey, setSelectedKey] = useState(null);
 
-      useEffect(() => {
-        const { settings: s, entries: e } = loadData();
-        setSettings(s); setEntries(e); setLoading(false);
-      }, []);
-
-      const monthLabel = `${MONTHS[cursor.m]} ${cursor.y}`;
       const changeMonth = (d) => setCursor((c) => { let m = c.m + d, y = c.y; if (m < 0) { m = 11; y -= 1; } if (m > 11) { m = 0; y += 1; } return { y, m }; });
 
       const grid = useMemo(() => {
@@ -90,120 +51,86 @@
         return cells;
       }, [cursor]);
 
-      const monthEntries = useMemo(() => {
+      const workedDays = useMemo(() => {
         const prefix = `${cursor.y}-${pad2(cursor.m + 1)}-`;
-        return Object.entries(entries).filter(([k, v]) => k.startsWith(prefix) && v.worked).sort(([a], [b]) => (a < b ? -1 : 1));
+        return Object.keys(entries).filter(k => k.startsWith(prefix) && entries[k]).length;
       }, [entries, cursor]);
 
-      const monthSummary = useMemo(() => {
-        let days = 0, normal = 0, ot = 0, pay = 0;
-        const projectBreakdown = {};
-        for (const [, v] of monthEntries) {
-          const th = totalHoursOf(v.ranges);
-          const p = payOf(th, v.holiday, settings);
-          days += 1; normal += p.normalHours; ot += p.otHours; pay += p.finalPay;
-          const prj = v.project || "Belirtilmedi";
-          if (!projectBreakdown[prj]) projectBreakdown[prj] = { hours: 0, pay: 0, days: 0 };
-          projectBreakdown[prj].hours += th; projectBreakdown[prj].pay += p.finalPay; projectBreakdown[prj].days += 1;
-        }
-        return { days, normal, ot, pay, projectBreakdown };
-      }, [monthEntries, settings]);
+      const toggleDay = (key) => {
+        const next = { ...entries, [key]: !entries[key] };
+        setEntries(next);
+        localStorage.setItem("yevmiye:entries", JSON.stringify(next));
+      };
 
-      if (loading) return <div style={{ background: C.bg, color: C.dim, height: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>Yükleniyor…</div>;
+      const handleWageChange = (val) => {
+        setDailyWage(val);
+        localStorage.setItem("yevmiye:wage", val);
+      };
 
-      return (
-        <div style={{ background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column", fontFamily: "system-ui" }}>
-          <div style={{ flex: 1, overflowY: "auto", paddingBottom: 12 }}>
-            {tab === "calendar" && <CalendarTab cursor={cursor} monthLabel={monthLabel} changeMonth={changeMonth} grid={grid} entries={entries} settings={settings} onSelect={setSelectedKey} />}
-            {tab === "summary" && <SummaryTab monthLabel={monthLabel} changeMonth={changeMonth} monthEntries={monthEntries} monthSummary={monthSummary} settings={settings} onSelect={setSelectedKey} />}
-            {tab === "settings" && <SettingsTab settings={settings} onChange={(s) => { setSettings(s); saveSettings(s); }} />}
-          </div>
-          <TabBar tab={tab} setTab={setTab} />
-          {selectedKey && (
-            <DaySheet dateKey={selectedKey} entry={entries[selectedKey]} settings={settings} onClose={() => setSelectedKey(null)} onSave={(entry) => {
-              const next = { ...entries };
-              if (!entry || !entry.worked) delete next[selectedKey]; else next[selectedKey] = entry;
-              setEntries(next); saveEntries(next); setSelectedKey(null);
-            }} />
-          )}
-        </div>
-      );
-    }
-
-    function TabBar({ tab, setTab }) {
-      const items = [{ id: "calendar", label: "Takvim", icon: CalendarIcon }, { id: "summary", label: "Özet", icon: BarChart3 }, { id: "settings", label: "Ayarlar", icon: SettingsIcon }];
-      return (
-        <div style={{ borderTop: `1px solid ${C.border}`, background: C.surface, display: "flex", paddingBottom: "env(safe-area-inset-bottom, 8px)" }}>
-          {items.map(({ id, label, icon: Icon }) => (
-            <button key={id} onClick={() => setTab(id)} style={{ flex: 1, background: "none", border: "none", padding: "10px 0 6px", display: "flex", flexDirection: "column", alignItems: "center", color: tab === id ? C.accent : C.dim }}>
-              <Icon size={22} /><span style={{ fontSize: 11 }}>{label}</span>
-            </button>
-          ))}
-        </div>
-      );
-    }
-
-    function CalendarTab({ cursor, monthLabel, changeMonth, grid, entries, settings, onSelect }) {
       const tKey = todayKey();
-      return (
-        <div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "18px 16px" }}>
-            <button onClick={() => changeMonth(-1)} style={{ background: C.surface2, border: "none", color: C.text, padding: 8, borderRadius: 8 }}><ChevronLeft /></button>
-            <div style={{ fontWeight: 700 }}>{monthLabel}</div>
-            <button onClick={() => changeMonth(1)} style={{ background: C.surface2, border: "none", color: C.text, padding: 8, borderRadius: 8 }}><ChevronRight /></button>
-          </div>
-          <div style={{ padding: "0 16px", display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
-            {WEEKDAYS.map((w) => <div key={w} style={{ textAlign: "center", fontSize: 11, color: C.dim2 }}>{w}</div>)}
-            {grid.map((d, i) => {
-              if (!d) return <div key={i} />;
-              const k = dateKey(cursor.y, cursor.m, d);
-              const entry = entries[k];
-              const th = entry?.worked ? totalHoursOf(entry.ranges) : 0;
-              return (
-                <button key={i} onClick={() => onSelect(k)} style={{ aspectRatio: "1", background: entry?.worked ? C.surface2 : "transparent", border: k === tKey ? `1.5px solid ${C.accent}` : `1px solid ${C.border}`, borderRadius: 10, color: C.text }}>
-                  <div>{d}</div>
-                  {th > 0 && <div style={{ fontSize: 9, color: C.accent }}>{th}s</div>}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      );
-    }
 
-    function SummaryTab({ monthLabel, changeMonth, monthEntries, monthSummary, settings, onSelect }) {
       return (
-        <div style={{ padding: 16 }}>
-          <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>{monthLabel} Özet</div>
-          <div style={{ background: C.surface, padding: 16, borderRadius: 12, marginBottom: 16 }}>
-            <div>Çalışılan Gün: {monthSummary.days} gün</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: C.accent, marginTop: 8 }}>Toplam: {fmtMoney(monthSummary.pay)}</div>
+        <div style={{ background: C.bg, color: C.text, minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+          <div style={{ flex: 1, padding: 16, paddingBottom: 80 }}>
+            {tab === "calendar" && (
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+                  <button onClick={() => changeMonth(-1)} style={{ background: C.surface2, border: "none", color: C.text, padding: "8px 16px", borderRadius: 8, cursor: "pointer" }}>❮</button>
+                  <div style={{ fontWeight: 700, fontSize: 18 }}>{MONTHS[cursor.m]} {cursor.y}</div>
+                  <button onClick={() => changeMonth(1)} style={{ background: C.surface2, border: "none", color: C.text, padding: "8px 16px", borderRadius: 8, cursor: "pointer" }}>❯</button>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 6 }}>
+                  {WEEKDAYS.map(w => <div key={w} style={{ textAlign: "center", fontSize: 12, color: C.dim, paddingBottom: 6 }}>{w}</div>)}
+                  {grid.map((d, i) => {
+                    if (!d) return <div key={i} />;
+                    const k = dateKey(cursor.y, cursor.m, d);
+                    const isWorked = entries[k];
+                    return (
+                      <button key={i} onClick={() => toggleDay(k)} style={{
+                        aspectRatio: "1", background: isWorked ? C.accent : C.surface2,
+                        color: isWorked ? "#12161c" : C.text,
+                        border: k === tKey ? `2px solid ${C.accent}` : `1px solid ${C.border}`,
+                        borderRadius: 10, fontWeight: isWorked ? "700" : "400", cursor: "pointer"
+                      }}>
+                        {d}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {tab === "summary" && (
+              <div>
+                <h2 style={{ marginBottom: 16 }}>{MONTHS[cursor.m]} {cursor.y} Özet</h2>
+                <div style={{ background: C.surface, padding: 16, borderRadius: 12, marginBottom: 12, border: `1px solid ${C.border}` }}>
+                  <div style={{ color: C.dim, fontSize: 14 }}>Çalışılan Gün</div>
+                  <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>{workedDays} Gün</div>
+                </div>
+                <div style={{ background: C.surface, padding: 16, borderRadius: 12, border: `1px solid ${C.border}` }}>
+                  <div style={{ color: C.dim, fontSize: 14 }}>Hak Edilen Toplam Tutar</div>
+                  <div style={{ fontSize: 28, fontWeight: 700, color: C.accent, marginTop: 4 }}>{(workedDays * dailyWage).toLocaleString("tr-TR")} ₺</div>
+                </div>
+              </div>
+            )}
+
+            {tab === "settings" && (
+              <div>
+                <h2 style={{ marginBottom: 16 }}>Ayarlar</h2>
+                <div style={{ background: C.surface, padding: 16, borderRadius: 12, border: `1px solid ${C.border}` }}>
+                  <label style={{ display: "block", marginBottom: 8, color: C.dim }}>Günlük Yevmiye (₺)</label>
+                  <input type="number" value={dailyWage} onChange={(e) => handleWageChange(Number(e.target.value))} style={{
+                    width: "100%", padding: 12, borderRadius: 8, background: C.surface2, color: C.text, border: `1px solid ${C.border}`, fontSize: 16
+                  }} />
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      );
-    }
 
-    function SettingsTab({ settings, onChange }) {
-      return (
-        <div style={{ padding: 16 }}>
-          <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>Ayarlar</div>
-          <label style={{ display: "block", marginBottom: 8 }}>Günlük Yevmiye (₺)</label>
-          <input type="number" value={settings.dailyWage} onChange={(e) => onChange({ ...settings, dailyWage: Number(e.target.value) })} style={{ width: "100%", padding: 8, borderRadius: 8, background: C.surface3, color: C.text, border: `1px solid ${C.border}` }} />
-        </div>
-      );
-    }
-
-    function DaySheet({ dateKey, entry, settings, onClose, onSave }) {
-      const [worked, setWorked] = useState(entry?.worked ?? false);
-      const [project, setProject] = useState(entry?.project || settings.projects[0]);
-      return (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "flex-end" }} onClick={onClose}>
-          <div style={{ width: "100%", background: C.surface, padding: 20, borderTopLeftRadius: 20, borderTopRightRadius: 20 }} onClick={(e) => e.stopPropagation()}>
-            <h3>{dateKey}</h3>
-            <label style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-              <input type="checkbox" checked={worked} onChange={(e) => setWorked(e.target.checked)} /> Çalıştım
-            </label>
-            <button onClick={() => onSave({ worked, ranges: [computeDefaultRange(settings.standardHours)], project })} style={{ width: "100%", padding: 12, background: C.accent, border: "none", borderRadius: 10, fontWeight: 700 }}>Kaydet</button>
+          <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, borderTop: `1px solid ${C.border}`, background: C.surface, display: "flex" }}>
+            <button onClick={() => setTab("calendar")} style={{ flex: 1, background: "none", border: "none", padding: "14px 0", color: tab === "calendar" ? C.accent : C.dim, fontWeight: 700 }}>Takvim</button>
+            <button onClick={() => setTab("summary")} style={{ flex: 1, background: "none", border: "none", padding: "14px 0", color: tab === "summary" ? C.accent : C.dim, fontWeight: 700 }}>Özet</button>
+            <button onClick={() => setTab("settings")} style={{ flex: 1, background: "none", border: "none", padding: "14px 0", color: tab === "settings" ? C.accent : C.dim, fontWeight: 700 }}>Ayarlar</button>
           </div>
         </div>
       );
