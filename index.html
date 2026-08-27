@@ -26,7 +26,7 @@
   <script type="text/babel">
     const { useState, useEffect, useMemo, useRef } = React;
 
-    // Varsayılan Başlangıç Parolası (0000 olarak güncellendi)
+    // Varsayılan Başlangıç Parolası
     const DEFAULT_APP_PASSWORD = "0000";
 
     // --- Lucide Icon Entegrasyonu ---
@@ -86,23 +86,48 @@
         standardEnd: p.standardEnd ?? settings.standardEnd ?? "17:00",
         dailyBreakHours: p.dailyBreakHours ?? settings.dailyBreakHours ?? 1,
         otMultiplier: p.otMultiplier ?? settings.otMultiplier ?? 1.5,
+        saturdayMultiplier: p.saturdayMultiplier ?? settings.saturdayMultiplier ?? 1.5,
         holidayMultiplier: p.holidayMultiplier ?? settings.holidayMultiplier ?? 2,
         transportGo: p.transportGo ?? 0,
         transportReturn: p.transportReturn ?? 0,
       };
     }
 
-    function payOf(rawHours, holiday, projSettings, transportPay = 0) {
+    function payOf(rawHours, holiday, projSettings, transportPay = 0, dateKeyString = null) {
       const windowHours = rangeHours(projSettings.standardStart, projSettings.standardEnd);
       const standardNet = Math.max(windowHours - projSettings.dailyBreakHours, 0.01);
       const netHours = rawHours > 0 ? Math.max(0, rawHours - projSettings.dailyBreakHours) : 0;
       const hourlyRate = projSettings.dailyWage / standardNet;
       const normalHours = Math.min(netHours, standardNet);
       const otHours = Math.max(0, netHours - standardNet);
-      const basePay = normalHours * hourlyRate + otHours * hourlyRate * projSettings.otMultiplier;
-      const wagePay = holiday ? basePay * projSettings.holidayMultiplier : basePay;
+      
+      let isSaturday = false;
+      if (dateKeyString) {
+        const [y, m, d] = dateKeyString.split("-").map(Number);
+        const dayOfWeek = new Date(y, m - 1, d).getDay();
+        isSaturday = (dayOfWeek === 6);
+      }
+
+      let basePay = 0;
+      if (isSaturday && !holiday) {
+        const satMult = projSettings.saturdayMultiplier;
+        basePay = netHours * hourlyRate * satMult;
+      } else {
+        basePay = normalHours * hourlyRate + otHours * hourlyRate * projSettings.otMultiplier;
+      }
+
+      let wagePay = basePay;
+      if (holiday) {
+        if (isSaturday) {
+          const effectiveMult = Math.max(projSettings.holidayMultiplier, projSettings.saturdayMultiplier);
+          wagePay = netHours * hourlyRate * effectiveMult;
+        } else {
+          wagePay = basePay * projSettings.holidayMultiplier;
+        }
+      }
+
       const finalPay = wagePay + (rawHours > 0 ? transportPay : 0);
-      return { hourlyRate, standardNet, netHours, normalHours, otHours, basePay: wagePay, finalPay, transportPay };
+      return { hourlyRate, standardNet, netHours, normalHours, otHours, basePay: wagePay, finalPay, transportPay, isSaturday };
     }
 
     const fmtMoney = (n) => (isFinite(n) ? n : 0).toLocaleString("tr-TR", { maximumFractionDigits: 0 }) + " ₺";
@@ -115,6 +140,7 @@
       standardEnd: "17:00",
       dailyBreakHours: 1,
       otMultiplier: 1.5,
+      saturdayMultiplier: 1.5,
       holidayMultiplier: 2,
       transportGo: 0,
       transportReturn: 0
@@ -238,7 +264,7 @@
         let days = 0, normal = 0, ot = 0, pay = 0, transport = 0;
         const projectMap = {};
 
-        for (const [, v] of monthEntries) {
+        for (const [k, v] of monthEntries) {
           const projName = v.project || settings.activeProject || "Genel Proje";
           const pSet = getProjectSettings(projName, settings);
           const th = totalHoursOf(v.ranges);
@@ -247,7 +273,7 @@
           if (v.includeTransportGo) tPay += v.transportGoVal ?? pSet.transportGo;
           if (v.includeTransportReturn) tPay += v.transportReturnVal ?? pSet.transportReturn;
 
-          const p = payOf(th, v.holiday, pSet, tPay);
+          const p = payOf(th, v.holiday, pSet, tPay, k);
           days += 1; normal += p.normalHours; ot += p.otHours; pay += p.finalPay; transport += tPay;
 
           if (!projectMap[projName]) {
@@ -588,9 +614,9 @@
                   const projName = entry.project || settings.activeProject || "Genel Proje";
                   const pSet = getProjectSettings(projName, settings);
                   const raw = totalHoursOf(entry.ranges);
-                  const p = payOf(raw, entry.holiday, pSet);
+                  const p = payOf(raw, entry.holiday, pSet, 0, k);
                   netH = p.netHours;
-                  dot = entry.holiday ? T.holiday : p.otHours > 0 ? T.ot : T.normal;
+                  dot = entry.holiday ? T.holiday : (p.otHours > 0 || p.isSaturday) ? T.ot : T.normal;
                 }
                 return (
                   <button key={i} onClick={() => onSelect(k)}
@@ -613,7 +639,7 @@
     function Legend({ T }) {
       const items = [
         { c: T.normal, t: "Normal mesai" },
-        { c: T.ot, t: "Fazla mesai var" },
+        { c: T.ot, t: "Çarpanlı / Fazla mesai" },
         { c: T.holiday, t: "Resmi tatil / hafta tatili" },
       ];
       return (
@@ -691,14 +717,14 @@
                   if (v.includeTransportGo) tPay += v.transportGoVal ?? pSet.transportGo;
                   if (v.includeTransportReturn) tPay += v.transportReturnVal ?? pSet.transportReturn;
 
-                  const p = payOf(raw, v.holiday, pSet, tPay);
+                  const p = payOf(raw, v.holiday, pSet, tPay, k);
                   const day = Number(k.slice(-2));
                   return (
                     <button key={k} onClick={() => onSelect(k)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: "10px 14px", cursor: "pointer", textAlign: "left" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <div className="mono" style={{ width: 30, height: 30, borderRadius: 9, background: T.surface3, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0 }}>{day}</div>
                         <div>
-                          <div style={{ fontSize: 13.5, fontWeight: 600 }}>{fmtHours(p.netHours)}{p.otHours > 0 ? ` · ${fmtHours(p.otHours)} mesai` : ""}</div>
+                          <div style={{ fontSize: 13.5, fontWeight: 600 }}>{fmtHours(p.netHours)}{p.otHours > 0 ? ` · ${fmtHours(p.otHours)} mesai` : ""}{p.isSaturday ? " (Cmt)" : ""}</div>
                           <div style={{ fontSize: 11, color: T.dim, marginTop: 1 }}>{projName} {tPay > 0 ? ` (+${tPay}₺ Yol)` : ""}</div>
                         </div>
                       </div>
@@ -900,6 +926,10 @@
               <input type="number" step="0.1" value={pSettings.otMultiplier} onChange={(e) => commitProjectSetting({ otMultiplier: Number(e.target.value) })} style={{ width: "100%" }} />
             </Field>
 
+            <Field T={T} label="Cumartesi mesai çarpanı" hint="Cumartesi günü yapılan mesai saatlerine uygulanır (örn. 1.5)">
+              <input type="number" step="0.1" value={pSettings.saturdayMultiplier} onChange={(e) => commitProjectSetting({ saturdayMultiplier: Number(e.target.value) })} style={{ width: "100%" }} />
+            </Field>
+
             <Field T={T} label="Resmi tatil / hafta tatili çarpanı" hint="Tatil günleri tüm mesaiye uygulanır (örn. 2)">
               <input type="number" step="0.1" value={pSettings.holidayMultiplier} onChange={(e) => commitProjectSetting({ holidayMultiplier: Number(e.target.value) })} style={{ width: "100%" }} />
             </Field>
@@ -1033,7 +1063,7 @@
       if (includeTransportReturn) currentTransportPay += Number(transportReturnVal || 0);
 
       const rawHours = totalHoursOf(worked ? ranges : []);
-      const p = payOf(rawHours, holiday, pSet, currentTransportPay);
+      const p = payOf(rawHours, holiday, pSet, currentTransportPay, dateKey);
 
       const toggleWorked = () => {
         const next = !worked;
@@ -1124,7 +1154,13 @@
                   <span>Net Saat ({pSet.dailyBreakHours}s Mola):</span>
                   <span className="mono" style={{ color: T.text, fontWeight: 600 }}>{fmtHours(p.netHours)}</span>
                 </div>
-                {p.otHours > 0 && (
+                {p.isSaturday && !holiday && (
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: T.ot, marginBottom: 4 }}>
+                    <span>Cumartesi Çarpanı ({pSet.saturdayMultiplier}x):</span>
+                    <span className="mono" style={{ fontWeight: 600 }}>Uygulandı</span>
+                  </div>
+                )}
+                {!p.isSaturday && p.otHours > 0 && (
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: T.ot, marginBottom: 4 }}>
                     <span>Fazla Mesai ({pSet.otMultiplier}x):</span>
                     <span className="mono" style={{ fontWeight: 600 }}>{fmtHours(p.otHours)}</span>
