@@ -63,6 +63,7 @@
     /* ---------------- Helpers ---------------- */
     const pad2 = (n) => String(n).padStart(2, "0");
     const dateKey = (y, m, d) => `${y}-${pad2(m + 1)}-${pad2(d)}`;
+    const monthKey = (y, m) => `${y}-${pad2(m + 1)}`;
     const todayKey = () => { const t = new Date(); return dateKey(t.getFullYear(), t.getMonth(), t.getDate()); };
 
     function rangeHours(start, end) {
@@ -159,7 +160,7 @@
 
     /* ---------------- Storage ---------------- */
     function loadAll() {
-      const out = { settings: DEFAULT_SETTINGS, entries: {}, profile: DEFAULT_PROFILE, theme: "dark", password: DEFAULT_APP_PASSWORD };
+      const out = { settings: DEFAULT_SETTINGS, entries: {}, monthPhotos: {}, profile: DEFAULT_PROFILE, theme: "dark", password: DEFAULT_APP_PASSWORD };
       try { 
         const s = localStorage.getItem("yevmiye:settings"); 
         if (s) {
@@ -168,6 +169,7 @@
         } 
       } catch (e) {}
       try { const en = localStorage.getItem("yevmiye:entries"); if (en) out.entries = JSON.parse(en); } catch (e) {}
+      try { const mp = localStorage.getItem("yevmiye:monthPhotos"); if (mp) out.monthPhotos = JSON.parse(mp); } catch (e) {}
       try { const pr = localStorage.getItem("yevmiye:profile"); if (pr) out.profile = { ...DEFAULT_PROFILE, ...JSON.parse(pr) }; } catch (e) {}
       try { const th = localStorage.getItem("yevmiye:theme"); if (th) out.theme = JSON.parse(th); } catch (e) {}
       try { const pw = localStorage.getItem("yevmiye:password"); if (pw) out.password = JSON.parse(pw); } catch (e) {}
@@ -175,6 +177,7 @@
     }
     const saveSettings = (v) => localStorage.setItem("yevmiye:settings", JSON.stringify(v));
     const saveEntries = (v) => localStorage.setItem("yevmiye:entries", JSON.stringify(v));
+    const saveMonthPhotos = (v) => localStorage.setItem("yevmiye:monthPhotos", JSON.stringify(v));
     const saveProfile = (v) => localStorage.setItem("yevmiye:profile", JSON.stringify(v));
     const saveTheme = (v) => localStorage.setItem("yevmiye:theme", JSON.stringify(v));
     const savePassword = (v) => localStorage.setItem("yevmiye:password", JSON.stringify(v));
@@ -187,6 +190,7 @@
       const [tab, setTab] = useState("home");
       const [cursor, setCursor] = useState(() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; });
       const [entries, setEntries] = useState({});
+      const [monthPhotos, setMonthPhotos] = useState({});
       const [settings, setSettings] = useState(DEFAULT_SETTINGS);
       const [profile, setProfile] = useState(DEFAULT_PROFILE);
       const [themeMode, setThemeMode] = useState("dark");
@@ -204,6 +208,7 @@
         const d = loadAll();
         setSettings(d.settings);
         setEntries(d.entries);
+        setMonthPhotos(d.monthPhotos || {});
         setProfile(d.profile);
         setThemeMode(d.theme);
         setAppPassword(d.password);
@@ -216,6 +221,7 @@
         saveTheme(next);
       };
 
+      const currentMonthKey = monthKey(cursor.y, cursor.m);
       const monthLabel = `${MONTHS[cursor.m]} ${cursor.y}`;
       const changeMonth = (delta) => {
         setCursor((c) => {
@@ -238,6 +244,17 @@
       const handlePasswordChange = (newPw) => {
         setAppPassword(newPw);
         savePassword(newPw);
+      };
+
+      const handleSaveMonthPhoto = (mKey, photoData) => {
+        const next = { ...monthPhotos };
+        if (photoData) {
+          next[mKey] = photoData;
+        } else {
+          delete next[mKey];
+        }
+        setMonthPhotos(next);
+        saveMonthPhotos(next);
       };
 
       const grid = useMemo(() => {
@@ -336,7 +353,19 @@
               <CalendarTab T={T} cursor={cursor} monthLabel={monthLabel} changeMonth={changeMonth} grid={grid} entries={entries} settings={settings} onSelect={setSelectedKey} />
             )}
             {tab === "summary" && (
-              <SummaryTab T={T} monthLabel={monthLabel} changeMonth={changeMonth} monthEntries={monthEntries} monthSummary={monthSummary} settings={settings} onSelect={setSelectedKey} profile={profile} />
+              <SummaryTab 
+                T={T} 
+                monthLabel={monthLabel} 
+                changeMonth={changeMonth} 
+                monthEntries={monthEntries} 
+                monthSummary={monthSummary} 
+                settings={settings} 
+                onSelect={setSelectedKey} 
+                profile={profile}
+                currentMonthKey={currentMonthKey}
+                photo={monthPhotos[currentMonthKey]}
+                onSavePhoto={(data) => handleSaveMonthPhoto(currentMonthKey, data)}
+              />
             )}
             {tab === "settings" && (
               <SettingsTab
@@ -655,11 +684,36 @@
     }
 
     /* ---------------- Summary tab ---------------- */
-    function SummaryTab({ T, monthLabel, changeMonth, monthEntries, monthSummary, settings, onSelect, profile }) {
+    function SummaryTab({ T, monthLabel, changeMonth, monthEntries, monthSummary, settings, onSelect, profile, currentMonthKey, photo, onSavePhoto }) {
       const { days, normal, ot, pay, transport, projectMap } = monthSummary;
       const fullName = `${profile.firstName || ''} ${profile.lastName || ''}`.trim();
+      const fileInputRef = useRef(null);
 
       const printPDF = () => { window.print(); };
+
+      const handleImageUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        // Dosya boyutu kontrolü (Gerekirse sıkıştırma yapılabilir, örn: max 3MB)
+        if (file.size > 5 * 1024 * 1024) {
+          alert("Lütfen 5MB'dan küçük bir fotoğraf seçiniz.");
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          onSavePhoto(reader.result);
+        };
+        reader.readAsDataURL(file);
+      };
+
+      const handleRemovePhoto = () => {
+        if (confirm("Bu aya ait fotoğrafı silmek istediğinize emin misiniz?")) {
+          onSavePhoto(null);
+          if (fileInputRef.current) fileInputRef.current.value = "";
+        }
+      };
 
       return (
         <div>
@@ -685,6 +739,51 @@
               {transport > 0 && <ReceiptRow T={T} label="Toplam yol ücreti" value={fmtMoney(transport)} />}
               <div style={{ borderTop: `1px dashed ${T.border}`, margin: "10px 0" }} />
               <ReceiptRow T={T} label="TOPLAM KAZANÇ" value={fmtMoney(pay)} big />
+            </div>
+
+            {/* --- Ayın Fotoğrafı / Belgesi Alanı --- */}
+            <div style={{ margin: "0 16px 18px" }}>
+              <div style={{ fontSize: 11, letterSpacing: 1, color: T.dim2, fontWeight: 700, marginBottom: 8, paddingLeft: 2 }}>
+                AYLIK FİŞ / BELGE / FOTOĞRAF
+              </div>
+              <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 16, padding: 14, boxShadow: T.shadow }}>
+                <input 
+                  type="file" 
+                  accept="image/*" 
+                  ref={fileInputRef} 
+                  onChange={handleImageUpload} 
+                  style={{ display: "none" }} 
+                />
+                
+                {photo ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", border: `1px solid ${T.border}`, background: T.surface2 }}>
+                      <img src={photo} alt={`${monthLabel} Fotoğrafı`} style={{ width: "100%", maxHeight: 300, objectFit: "contain", display: "block" }} />
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }} className="no-print">
+                      <button 
+                        onClick={() => fileInputRef.current && fileInputRef.current.click()} 
+                        style={{ flex: 1, background: T.surface2, color: T.text, border: `1px solid ${T.border}`, borderRadius: 10, padding: "8px 0", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
+                        <Icon name="refresh-cw" size={14} /> Değiştir
+                      </button>
+                      <button 
+                        onClick={handleRemovePhoto} 
+                        style={{ background: T.surface2, color: T.danger, border: `1px solid ${T.border}`, borderRadius: 10, padding: "8px 14px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
+                        <Icon name="trash-2" size={14} color={T.danger} /> Sil
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button 
+                    onClick={() => fileInputRef.current && fileInputRef.current.click()} 
+                    className="no-print"
+                    style={{ width: "100%", background: T.surface2, color: T.dim, border: `1px dashed ${T.border}`, borderRadius: 12, padding: "20px 0", display: "flex", flexDirection: "column", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                    <Icon name="camera" size={24} color={T.accent} />
+                    <span style={{ fontSize: 13.5, fontWeight: 600, color: T.text }}>{monthLabel} İçin Fotoğraf/Fiş Yükle</span>
+                    <span style={{ fontSize: 11.5, color: T.dim2 }}>Puantaj cetveli, imza şablonu veya fiş görseli</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             {Object.keys(projectMap).length > 0 && (
